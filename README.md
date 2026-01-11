@@ -19,7 +19,7 @@ This repository contains Python implementations for the **Minimum Cycle Basis (M
   - **C3-C5 Enumeration**: Explicitly enumerates cycles up to length 5.
   - **Guided DFS**: Uses structural information (H-structure) to guide Deep First Search for longer cycles (C6+).
   - **Robustness**: Includes strict "induced cycle" checks and memory management.
-- **Usage**: Recommended for competitive programming (e.g., Huawei Soft Challenge) or processing medium-to-large graphs (10k - 500k edges).
+- **Usage**: Recommended for competitive programming or processing medium-to-large graphs (10k - 500k edges).
 
 ## How to Run
 
