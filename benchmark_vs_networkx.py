@@ -10,6 +10,17 @@ except ImportError:
     print("  pip install networkx")
     sys.exit(1)
 
+try:
+    import igraph as ig
+except (ImportError, OSError) as e:
+    print(f"警告: 无法加载 igraph 库 ({e})，无法对比 igraph 性能。")
+    ig = None
+
+try:
+    import rustworkx as rx
+except (ImportError, OSError):
+    rx = None
+
 # 引入你的 enhanced 版本逻辑
 # 假设 solution_enhanced.py 在同一目录下，且我们要调用其中的 InputDataProcessor, SimpleIndependentCycleSelector 等
 # 为了方便调用，我们稍微 wrap 一下你的代码逻辑
@@ -114,7 +125,59 @@ def benchmark_one_case(case_name, G):
     
     nx_time = end_nx - start_nx
     nx_total_len = sum(len(c) for c in nx_basis)
-    print(f"[NetworkX] Time: {nx_time:.4f}s | Basis Weight: {nx_total_len} | Count: {len(nx_basis)}")
+    print(f"[NetworkX]   Time: {nx_time:.4f}s | Basis Weight: {nx_total_len} | Count: {len(nx_basis)}")
+
+    # --- Run igraph (if available) ---
+    ig_time = -1.0
+    if ig is not None:
+        try:
+            # 转换 NetworkX 图到 igraph
+            # 注意：igraph 的节点 ID 必须是连续整数 0..N-1，这里简单起见我们只传边列表
+            # NetworkX 的 convert_node_labels_to_integers 通常已经保证了 0..N-1
+            # 但为了通用，我们重新建立映射
+            mapping = {n: i for i, n in enumerate(G.nodes())}
+            ig_edges = [(mapping[u], mapping[v]) for u, v in edges]
+            g_ig = ig.Graph(n=len(mapping), edges=ig_edges, directed=False)
+            
+            start_ig = time.time()
+            # igraph 的 result 是 edge IDs 的 list of lists，或者 vertex lists
+            # minimum_cycle_basis 方法返回 edge IDs
+            # use_cycle_basis=True 可能会启用优化
+            ig_basis_node_lists = g_ig.minimum_cycle_basis(use_cycle_basis=True)
+            end_ig = time.time()
+            
+            ig_time = end_ig - start_ig
+            # igraph 返回的是 node list，直接 len 即可
+            ig_total_len = sum(len(c) for c in ig_basis_node_lists)
+            print(f"[igraph (C)] Time: {ig_time:.4f}s | Basis Weight: {ig_total_len} | Count: {len(ig_basis_node_lists)}")
+
+        except Exception as e:
+            print(f"[igraph] Failed: {e}")
+
+    # --- Run rustworkx (if available) ---
+    rx_time = -1.0
+    if rx is not None:
+        try:
+            # Construct rustworkx graph
+            # mapping matches 0..N-1
+            mapping_rx = {n: i for i, n in enumerate(G.nodes())}
+            py_graph = rx.PyGraph()
+            py_graph.add_nodes_from(range(len(G.nodes())))
+            edge_list_rx = [(mapping_rx[u], mapping_rx[v]) for u, v in edges]
+            py_graph.add_edges_from_no_data(edge_list_rx)
+            
+            start_rx = time.time()
+            # Note: rx.cycle_basis is usually Fundamental Cycle Basis (FCB), NOT Minimum Cycle Basis (MCB).
+            # It serves as a performance baseline for compiled graph traversal.
+            rx_basis = rx.cycle_basis(py_graph)
+            end_rx = time.time()
+            
+            rx_time = end_rx - start_rx
+            rx_total_len = sum(len(c) for c in rx_basis)
+            print(f"[rustworkx (Rust)] Time: {rx_time:.4f}s | Basis Weight: {rx_total_len} | Count: {len(rx_basis)} (Note: Likely FCB, not MCB)")
+
+        except Exception as e:
+            print(f"[rustworkx] Failed: {e}")
 
     # --- Run My Algo ---
     start_my = time.time()
@@ -127,16 +190,21 @@ def benchmark_one_case(case_name, G):
         print(f"[My Algorithm] Time: {my_time:.4f}s | Basis Weight: {my_total_len} | Count: {len(my_basis_lengths)}")
         
         # --- Comparison ---
-        speedup = nx_time / my_time if my_time > 0 else 0.0
-        print(f"Speedup vs NetworkX: {speedup:.2f}x")
+        speedup_nx = nx_time / my_time if my_time > 0 else 0.0
+        print(f"Speedup vs NetworkX: {speedup_nx:.2f}x")
+        
+        if ig_time > 0:
+            speedup_ig = ig_time / my_time if my_time > 0 else 0.0
+            print(f"Speedup vs igraph:   {speedup_ig:.2f}x (My Algo is {'FASTER' if speedup_ig > 1 else 'slower'})")
+        
+        if rx_time > 0:
+            speedup_rx = rx_time / my_time if my_time > 0 else 0.0
+            print(f"Speedup vs rustworkx:{speedup_rx:.2f}x (My Algo is {'FASTER' if speedup_rx > 1 else 'slower'})")
         
         if nx_total_len == my_total_len:
-            print("✅ 正确性验证通过 (总权重一致)")
+            print("✅ 正确性验证通过 (vs NX)")
         else:
-            print(f"❌ 权重不一致! Diff: {abs(nx_total_len - my_total_len)}")
-            # 注意：如果你的算法用了 fallback，可能找到的不是严格最小环基（approx），
-            # 或者 NetworkX 在某些非连通图处理上的定义差异。
-            # 大多数情况下应该是一致的。
+            print(f"⚠️ 权重不一致 (vs NX)! Diff: {my_total_len - nx_total_len}")
 
     except Exception as e:
         print(f"[My Algorithm] Failed: {e}")
