@@ -7,8 +7,7 @@ import sys
 import re
 import time
 import itertools
-from dataclasses import dataclass, fields
-import argparse
+from dataclasses import dataclass
 from collections import defaultdict, deque
 from typing import Dict, Set, Tuple, List, Optional, FrozenSet, Callable, Any
 
@@ -101,9 +100,11 @@ class InputDataProcessor:
     - Constructs dfs_dirs_by_edge: Guides C6+ DFS (provides directions, does not directly form cycles)
     """
 
-    def __init__(self, lines: List[List[str]]):
+    def __init__(self, lines: List[List[str]], heavy_edge_threshold: int = 64):
         self.lines = lines
         self.pad_width: Optional[int] = None
+        self.heavy_edge_threshold = heavy_edge_threshold
+        self.heavy_edge_count = 0
 
         # -------- Graph Structure --------
         self.undirected_edge2_single_str: Set[Tuple[str, str]] = set()
@@ -269,25 +270,37 @@ class InputDataProcessor:
             only_b = Nb - common
             unique = only_a | only_b
 
-            # Dynamic heuristic limit based on local neighborhood size
-            # Limit = 2 * max(len(source_set_for_pair)) isn't quite right for A vs B.
-            # Interpreting "2 * max node" as 2 * max(degree(a), degree(b)) for this edge context.
-            limit_dynamic_1 = 1 * max(len(Na), len(Nb))
-            limit_dynamic_2 = 1 * (len(only_a) + len(only_b))
-            limit_dynamic = max(limit_dynamic_1, limit_dynamic_2)
-            # Ensure a sensible minimum for very small graphs/neighborhoods
-            if limit_dynamic < 50: 
-                limit_dynamic = 50
+            # -------- Heuristic: Skip expensive structure O(N^2) on Heavy Edges --------
+            size_a, size_b = len(only_a), len(only_b)
+            # Default threshold is 64. If 0, optimization is disabled.
+            is_heavy = False
+            if self.heavy_edge_threshold > 0:
+                is_heavy = (size_a > self.heavy_edge_threshold) or (size_b > self.heavy_edge_threshold)
 
-            B = set(itertools.islice(itertools.combinations(sorted(only_a), 2), limit_dynamic))
-            C = set(itertools.islice(itertools.combinations(sorted(only_b), 2), limit_dynamic))
+            if is_heavy:
+                self.heavy_edge_count += 1
+                self.dict_edge_to_cycles[(a, b)] = (set(), set(), set(), set())
+                # Still check C3 as it is cheap
+                # -------- C3: a-x-b-a --------
+                for x in common:
+                    cyc_nodes = {a, b, x}
+                    if (not induced_only) or self._is_induced_cycle_nodes(cyc_nodes):
+                        cycles_by_len[3].add(frozenset((
+                            edge_index[(a, b)],
+                            edge_index[(a, x)],
+                            edge_index[(b, x)]
+                        )))
+                continue
+
+            B = set(itertools.combinations(sorted(only_a), 2))
+            C = set(itertools.combinations(sorted(only_b), 2))
             E = (B | C) & E2
             F = ((B | C) - E) - E2
 
-            D = set(itertools.islice(itertools.combinations(sorted(unique), 2), limit_dynamic))
+            D = set(itertools.combinations(sorted(unique), 2))
             G = (D - B - C) & E2
 
-            A = set(itertools.islice(itertools.combinations(sorted(Na | Nb), 2), limit_dynamic))
+            A = set(itertools.combinations(sorted(Na | Nb), 2))
             H = (A - B - C) - G
 
             self.dict_edge_to_cycles[(a, b)] = (E, F, G, H)
@@ -933,6 +946,10 @@ class AppConfig:
     generate_individual_log: bool = False
     # Delete individual logs after consolidation (used with --task=consolidate_logs). Default: True.
     delete_after_consolidate: bool = True
+    
+    # Heavy Edge optimization: skip exhaustive structure search for nodes with too many neighbors
+    # to avoid O(N^2) explosion. 0 means disabled.
+    heavy_edge_threshold: int = 64
 
     # New: Callback interfaces
     on_progress: Optional[Callable[[str, float], None]] = None
@@ -1126,7 +1143,7 @@ class CycleBasisApp:
 
     def _execute_pipeline(self, lines: List[List[str]]) -> Tuple[List[FrozenSet[int]], int, InputDataProcessor]:
         """Execute core pipeline, returning (basis, beta, processor)"""
-        processor = InputDataProcessor(lines)
+        processor = InputDataProcessor(lines, heavy_edge_threshold=self.cfg.heavy_edge_threshold)
         self._progress("build_processor", 0.2)
 
         edge_cnt = len(processor.undirected_edge2_single_str)
@@ -1422,93 +1439,6 @@ def main():
 
 
 if __name__ == "__main__":
-    # Benchmark & Verification
-    import time
-    
-    def get_basis_metrix(basis, name):
-        # Normalize weight calculation:
-        # Some impls return [A,B,C,A] (len 4, but really 3 edges).
-        # NetworkX returns [A,B,C] (len 3, 3 edges).
-        total_len = 0
-        for c in basis:
-            l = len(c)
-            if len(c) > 0 and c[0] == c[-1]:
-                l -= 1
-            total_len += l
-        return total_len
-
-    try:
-        import networkx as nx
-        print("\n[Verification] Comparing accuracy (Total Length) and Speed...")
-
-        # 1. Grid graph (14x14 = 196 nodes)
-        G1 = nx.grid_2d_graph(14, 14)
-        print(f"\n[Grid 14x14] Nodes: {len(G1.nodes())}, Edges: {len(G1.edges())}")
-        
-        t0 = time.time()
-        basis1 = minimum_cycle_basis_heuristic(G1)
-        w1 = get_basis_metrix(basis1, "Mine")
-        print(f"  >>> Mine     | Time: {time.time()-t0:.4f}s | Size: {len(basis1)} | Total Length: {w1}")
-        
-        try:
-            t0 = time.time()
-            basis1_nx = nx.minimum_cycle_basis(G1)
-            w1_nx = get_basis_metrix(basis1_nx, "NetworkX")
-            print(f"  >>> NetworkX | Time: {time.time()-t0:.4f}s | Size: {len(basis1_nx)} | Total Length: {w1_nx}")
-            
-            if w1 == w1_nx:
-                print("  [SUCCESS] Results Match!")
-            else:
-                print(f"  [WARNING] Mismatch! Diff: {w1 - w1_nx}")
-        except Exception as e:
-            print("  NetworkX failed:", e)
-
-        # 2. Wheel graph Comparison (n=300)
-        G2 = nx.wheel_graph(300)
-        print(f"\n[Wheel n=300] Comparison")
-        
-        t0 = time.time()
-        basis2 = minimum_cycle_basis_heuristic(G2)
-        w2 = get_basis_metrix(basis2, "Mine")
-        print(f"  >>> Mine     | Time: {time.time()-t0:.4f}s | Size: {len(basis2)} | Total Length: {w2}")
-        
-        print("  ... Running NetworkX (Wait ~60s) ...")
-        
-        try:
-            t0 = time.time()
-            basis2_nx = nx.minimum_cycle_basis(G2)
-            w2_nx = get_basis_metrix(basis2_nx, "NetworkX")
-            print(f"  >>> NetworkX | Time: {time.time()-t0:.4f}s | Size: {len(basis2_nx)} | Total Length: {w2_nx}")
-             
-            if w2 == w2_nx:
-                print("  [SUCCESS] Results Match!")
-            else:
-                print(f"  [WARNING] Mismatch! Diff: {w2 - w2_nx}")
-        except Exception as e:
-            print("  NetworkX failed:", e)
-
-        # 3. Random G(n,p) (n=100, p=0.1) - Smaller but dense to check correctness
-        # We use a smaller random graph to ensure NetworkX finishes in reasonable time for verification
-        G3 = nx.gnp_random_graph(100, 0.1, seed=42) 
-        print(f"\n[Random G(100,0.1)] Nodes: {len(G3.nodes())}, Edges: {len(G3.edges())}")
-        
-        t0 = time.time()
-        basis3 = minimum_cycle_basis_heuristic(G3)
-        w3 = get_basis_metrix(basis3, "Mine")
-        print(f"  >>> Mine     | Time: {time.time()-t0:.4f}s | Size: {len(basis3)} | Total Length: {w3}")
-        
-        try:
-            t0 = time.time()
-            basis3_nx = nx.minimum_cycle_basis(G3)
-            w3_nx = get_basis_metrix(basis3_nx, "NetworkX")
-            print(f"  >>> NetworkX | Time: {time.time()-t0:.4f}s | Size: {len(basis3_nx)} | Total Length: {w3_nx}")
-
-            if w3 == w3_nx:
-                print("  [SUCCESS] Results Match!")
-            else:
-                print(f"  [WARNING] Mismatch! Diff: {w3 - w3_nx}")
-        except Exception as e:
-            print("  NetworkX failed:", e)
-
-    except ImportError:
-        print("networkx not installed, skipping demo.")
+    import argparse
+    from dataclasses import fields
+    main()
