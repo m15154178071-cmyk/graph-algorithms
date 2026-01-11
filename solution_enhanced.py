@@ -9,7 +9,7 @@ import time
 import itertools
 from dataclasses import dataclass
 from collections import defaultdict, deque
-from typing import Dict, Set, Tuple, List, Optional, FrozenSet, Callable
+from typing import Dict, Set, Tuple, List, Optional, FrozenSet, Callable, Any
 
 
 # =====================================================
