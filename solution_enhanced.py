@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import os
-# ===== locale 兜底（华为评测常见坑，建议保留）=====
-os.environ.setdefault("LC_ALL", "C")
-os.environ.setdefault("LANG", "C")
+# ===== Remove locale settings; ensure compatibility via standard libraries =====
 
 import sys
 import re
@@ -24,8 +22,8 @@ class CycleUtils:
         eid_to_edge: List[Optional[Tuple[str, str]]],
     ) -> Optional[List[str]]:
         """
-        从一组 eids 还原一个合法 simple cycle 的节点顺序
-        返回: [v1, v2, ..., v1]
+        Reconstruct a valid simple cycle node order from a set of edge IDs (eids).
+        Returns: [v1, v2, ..., v1]
         """
         adj: Dict[str, List[str]] = defaultdict(list)
         for eid in cycle_eids:
@@ -39,7 +37,7 @@ class CycleUtils:
         if not adj:
             return None
 
-        # simple cycle：每个点度应为 2
+        # simple cycle: each node must have a degree of 2
         for x, ns in adj.items():
             if len(ns) != 2:
                 return None
@@ -60,7 +58,7 @@ class CycleUtils:
                 path.append(start)
                 break
 
-            # 防死循环（异常数据兜底）
+            # infinite loop protection (data anomaly fallback)
             if nxt in path:
                 return None
 
@@ -76,20 +74,20 @@ class CycleUtils:
         idx: int = -1,
     ) -> None:
         """
-        强 simple 校验：每个点度必须为 2
+        Strict simple cycle check: each node must have a degree of 2.
         """
         deg: Dict[str, int] = defaultdict(int)
         for eid in cyc:
             uv = eid_to_edge[eid]
             if uv is None:
-                raise RuntimeError(f"非法 eid={eid} (index={idx})")
+                raise RuntimeError(f"Invalid eid={eid} (index={idx})")
             u, v = uv
             deg[u] += 1
             deg[v] += 1
             if deg[u] > 2 or deg[v] > 2:
-                raise RuntimeError(f"非 simple 环（index={idx}）")
+                raise RuntimeError(f"Non-simple cycle (index={idx})")
         if any(d != 2 for d in deg.values()):
-            raise RuntimeError(f"非 simple 环（index={idx}）")
+            raise RuntimeError(f"Non-simple cycle (index={idx})")
 
 
 # =====================================================
@@ -97,26 +95,26 @@ class CycleUtils:
 # =====================================================
 class InputDataProcessor:
     """
-    - 枚举 C3 / C4 / C5（可选 induced_only = 无弦）
-    - 提取结构 F / H
-    - 构造 dfs_dirs_by_edge：给 C6+ DFS 指路（只提供方向，不直接成环）
+    - Enumerates C3 / C4 / C5 (optional induced_only = chordless)
+    - Extracts structures F / H
+    - Constructs dfs_dirs_by_edge: Guides C6+ DFS (provides directions, does not directly form cycles)
     """
 
     def __init__(self, lines: List[List[str]]):
         self.lines = lines
         self.pad_width: Optional[int] = None
 
-        # -------- 图结构 --------
+        # -------- Graph Structure --------
         self.undirected_edge2_single_str: Set[Tuple[str, str]] = set()
         self.adjacency_map: Dict[str, Set[str]] = {}
 
-        # -------- 边编号 --------
+        # -------- Edge Indexing --------
         self.edge_index_map: Dict[Tuple[str, str], int] = {}
         self.eid_to_edge: List[Optional[Tuple[str, str]]] = [None]  # 1-based
         self.node_index_map: Dict[str, int] = {}
 
-        # -------- 结构缓存 --------
-        # dict_edge_to_cycles[(a,b)] = (E, F, G, H) 每个都是 set[(u,v)]
+        # -------- Structure Cache --------
+        # dict_edge_to_cycles[(a,b)] = (E, F, G, H) each is set[(u,v)]
         self.dict_edge_to_cycles: Dict[
             Tuple[str, str],
             Tuple[Set[Tuple[str, str]], Set[Tuple[str, str]], Set[Tuple[str, str]], Set[Tuple[str, str]]]
@@ -127,7 +125,7 @@ class InputDataProcessor:
         self.G_SUMMARY: Set[Tuple[str, str]] = set()
         self.H_SUMMARY: Set[Tuple[str, str]] = set()
 
-        # -------- DFS 方向索引（核心）--------
+        # -------- DFS Direction Index (Core) --------
         # dfs_dirs_by_edge[(a,b)] = tuple[(m1,m2), ...]
         self.dfs_dirs_by_edge: Dict[Tuple[str, str], Tuple[Tuple[str, str], ...]] = {}
 
@@ -136,7 +134,7 @@ class InputDataProcessor:
         self._build_node_index()
 
     # =====================================================
-    # 构建无向图（兼容脏行：row 不一定正好两个数）
+    # Build undirected graph (compatible with dirty rows: row may not have exactly two numbers)
     # =====================================================
     def _build_graph(self) -> None:
         edges: List[Tuple[int, int]] = []
@@ -154,7 +152,7 @@ class InputDataProcessor:
             if len(nums) < 2:
                 continue
 
-            # 兼容"行里可能多于2个数"：取 min/max 当作无向边
+            # Compatible with "maybe more than 2 numbers in a row": take min/max as undirected edge
             u = min(nums)
             v = max(nums)
             if u != v:
@@ -183,7 +181,7 @@ class InputDataProcessor:
         self.adjacency_map = dict(adj)
 
     # =====================================================
-    # 构建边 eid
+    # Build Edge IDs
     # =====================================================
     def _build_edge_index(self) -> None:
         for u, v in sorted(self.undirected_edge2_single_str):
@@ -193,7 +191,7 @@ class InputDataProcessor:
             self.eid_to_edge.append((u, v))
 
     # =====================================================
-    # 构建节点索引
+    # Build Node Index
     # =====================================================
     def _build_node_index(self) -> None:
         nid = 1
@@ -206,7 +204,7 @@ class InputDataProcessor:
                 nid += 1
 
     # =====================================================
-    # 最小环基秩 beta = |E| - |V| + cc
+    # Cyclomatic Number (Rank) beta = |E| - |V| + cc
     # =====================================================
     def connected_components_count(self) -> int:
         """Count connected components in the current graph (nodes implied by edges)."""
@@ -235,7 +233,7 @@ class InputDataProcessor:
         return len(self.undirected_edge2_single_str) - len(self.node_index_map) + cc
 
     # =====================================================
-    # 无弦(诱导环)判定：子图中每点度=2 等价于边数=点数
+    # Chordless (Induced) Cycle Check: edge count == node count in subgraph
     # =====================================================
     def _is_induced_cycle_nodes(self, nodes: Set[str]) -> bool:
         for x in nodes:
@@ -250,14 +248,14 @@ class InputDataProcessor:
         return True
 
     # =====================================================
-    # 枚举 C3/C4/C5 + 构造 F/H + 构造向导字典 dfs_dirs_by_edge
+    # Enumerate C3/C4/C5 + Construct F/H + Build Guide Dict dfs_dirs_by_edge
     # =====================================================
     def enumerate_cycles(self, induced_only: bool = True) -> Dict[int, Set[FrozenSet[int]]]:
         cycles_by_len: Dict[int, Set[FrozenSet[int]]] = defaultdict(set)
         E2 = self.undirected_edge2_single_str
         edge_index = self.edge_index_map
 
-        # -------- 先生成结构缓存（F/H 等）--------
+        # -------- Precompute Structure Cache (F/H etc.) --------
         for (a0, b0) in E2:
             a, b = (a0, b0) if a0 < b0 else (b0, a0)
             edge_set = {a, b}
@@ -287,7 +285,7 @@ class InputDataProcessor:
             self.G_SUMMARY |= G
             self.H_SUMMARY |= H
 
-            # -------- C3：a-x-b-a --------
+            # -------- C3: a-x-b-a --------
             for x in common:
                 cyc_nodes = {a, b, x}
                 if (not induced_only) or self._is_induced_cycle_nodes(cyc_nodes):
@@ -297,7 +295,7 @@ class InputDataProcessor:
                         edge_index[(b, x)]
                     )))
 
-            # -------- C4：a-u-v-b-a （用 G）--------
+            # -------- C4: a-u-v-b-a (using G) --------
             for (u, v) in G:
                 cyc_nodes = {a, b, u, v}
                 if induced_only and (not self._is_induced_cycle_nodes(cyc_nodes)):
@@ -445,7 +443,7 @@ class GuidedDFSFinder:
         if min_len > max_len or per_edge_limit <= 0:
             return {}
 
-        # 1) 收集已覆盖边
+        # 1) Collect covered edges
         used_edges: Set[Tuple[str, str]] = set()
         for cycles in base_cycles_by_len.values():
             for cyc in cycles:
@@ -454,13 +452,13 @@ class GuidedDFSFinder:
                     if uv is not None:
                         used_edges.add(uv)
 
-        # 2) 未覆盖边
+        # 2) Uncovered edges
         rest_edges = [e for e in self.undirected_edges if e not in used_edges]
         rest_edges.sort()
 
         added: Dict[int, Set[FrozenSet[int]]] = defaultdict(set)
 
-        # 3) 对每条未覆盖边，用向导 dirs 补环
+        # 3) Supplement cycles for each uncovered edge using guided dirs
         for (a0, b0) in rest_edges:
             a, b = (a0, b0) if a0 < b0 else (b0, a0)
 
@@ -528,7 +526,7 @@ class SimpleIndependentCycleSelector:
         cycle_lines = tuple(itertools.combinations(nodes_sorted, 2))
         edge_set = set(cycle_lines)
 
-        # induced simple ring: 子图中边数 == 点数
+        # induced simple ring: edge count == node count in subgraph
         if len(edge_set & undirected_edge2_single_str) != len(nodes_sorted):
             return False
         return True
@@ -559,7 +557,7 @@ class SimpleIndependentCycleSelector:
         return True
 
     def run(self):
-        # 1) 收集 simple cycles（长度优先）+ 去重
+        # 1) Collect simple cycles (sorted by length) + deduplicate
         simple_set: Set[FrozenSet[int]] = set()
         simple_list: List[FrozenSet[int]] = []
         for L in sorted(self.cycles_by_len):
@@ -571,12 +569,12 @@ class SimpleIndependentCycleSelector:
                     simple_list.append(cyc)
 
         self.debug_print("==================================")
-        self.debug_print("第二阶段 Step1: simple cycle 过滤+去重 完成")
-        self.debug_print("  simple cycles 总数:", len(simple_list))
-        self.debug_print("  目标 beta:", self.beta)
+        self.debug_print("Phase 2 Step1: Simple cycle filtering + deduplication complete")
+        self.debug_print("  Total simple cycles:", len(simple_list))
+        self.debug_print("  Target beta:", self.beta)
         self.debug_print("==================================")
 
-        # 2) GF(2) 线性无关筛选：扫完全部 simple
+        # 2) GF(2) linear independence check: scan all simple cycles
         for cyc in simple_list:
             self.perf_simple_scanned += 1
             added = self._try_add_independent(cyc)
@@ -591,10 +589,10 @@ class SimpleIndependentCycleSelector:
         is_complete = (len(self.independent_cycles) == self.beta)
 
         self.debug_print("==================================")
-        self.debug_print("第二阶段 Step2: GF(2) 线性无关筛选 完成")
-        self.debug_print("  independent(simple) 数量:", len(self.independent_cycles))
+        self.debug_print("Phase 2 Step2: GF(2) independence selection complete")
+        self.debug_print("  independent(simple) count:", len(self.independent_cycles))
         self.debug_print("  beta:", self.beta)
-        self.debug_print("  是否已满足 beta:", is_complete)
+        self.debug_print("  Beta satisfied:", is_complete)
         self.debug_print("==================================")
 
         return self.independent_cycles, is_complete
@@ -679,6 +677,7 @@ class CycleBasisBuilder:
                         self.root_xor_mask[y] = self.root_xor_mask.get(x, 0) ^ (1 << eid)
 
                     q.append(y)
+
 
     # -------- tree path eids (u -> v) --------
     def _tree_path_eids(self, u: str, v: str) -> List[int]:
@@ -793,9 +792,9 @@ class CycleBasisBuilder:
 
         def try_add_cycle_with_mask(cyc: FrozenSet[int], m: int) -> bool:
             """
-            统一入口：
-            - cyc：要存入 basis_out 的"具体环"（必须是 simple）
-            - m：该环对应的 GF(2) mask（用于判独立 + 选 pivot）
+            Unified entry point:
+            - cyc: The concrete simple cycle to store (for output)
+            - m: The GF(2) mask for this cycle (for independence check + pivot)
             """
             if cyc in basis_set:
                 return False
@@ -852,7 +851,7 @@ class CycleBasisBuilder:
             if not self.parent:
                 self.build_spanning_tree()
 
-            # 避免 (u,v) 与 (v,u) 重复：只扫单向 undirected 边
+            # Avoid duplicates (u,v) vs (v,u): scan only unique undirected edges
             undirected_unique: Set[Tuple[str, str]] = set()
             for eid in range(1, len(self.eid_to_edge)):
                 uv = self.eid_to_edge[eid]
@@ -871,7 +870,7 @@ class CycleBasisBuilder:
 
                 mask = self._tree_path_mask(u, v) ^ (1 << eid)
 
-                # fundamental 本体环：天然 simple（tree path + chord）
+                # Fundamental cycle is naturally simple (tree path + chord)
                 cyc = self._mask_to_cycle(mask)
 
                 self.perf_fallback_tried += 1
@@ -890,39 +889,41 @@ class CycleBasisBuilder:
 # =====================================================
 @dataclass(frozen=True)
 class AppConfig:
-    """配置数据容器 - 所有参数都在main函数中设置"""
-    # 是否只寻找诱导环（无弦环）。True会过滤掉非诱导环，结果更"纯净"，但可能错过一些环。默认True。
+    """Config container - all parameters set in main"""
+    # Find induced chordless cycles only. True provides "cleaner" cycles but might miss some. Default: True.
     induced_only: bool = True
-    # DFS搜索的最小环长度。默认6。
+    # Min cycle length for DFS. Default: 6.
     dfs_min_len: int = 6
-    # DFS搜索的最大环长度。增加此值可找到更长的环，但会显著增加运行时间。建议范围[7, 10]。默认9。
+    # Max cycle length for DFS. Increase to find longer cycles but slower. Suggested [7, 10]. Default: 9.
     dfs_max_len: int = 9
-    # 对每条未被小环覆盖的边，通过DFS最多补充几个新环。增加此值能找到更多环，但会增加时间。默认1。
+    # Limit number of cycles added per uncovered edge via DFS. Default: 1.
     dfs_per_edge_limit: int = 1
-    # 允许处理的最大边数，用于内存控制。
+    # Max strict edge count for memory safety.
+
+
     max_edges: int = 800000
-    # 输出时是否将节点ID转为整数（去掉前导零）。默认True。
+    # Output node IDs as integers (remove leading zeros). Default: True.
     output_pad_to_int: bool = True
-    # 当图的规模（边数）超过此阈值时，可能会触发一些快速但可能非最优的策略。
+    # Fast fundamental threshold: Large graphs might trigger fast heuristics.
     fast_fundamental_threshold: int = 12000
-    # 是否强制只使用“基本环基”算法。此算法速度快，但找到的环可能较长。适用于超大规模或复杂图。默认False。
+    # Force use of fundamental basis only. Fast but produces longer cycles. Better for huge/complex graphs. Default: False.
     force_fundamental_only: bool = False
-    # 基本环基算法中，是否启用DFS补环以改善结果质量。默认True。
+    # Use DFS guidance in fundamental basis algo to improve cycle quality. Default: True.
     fundamental_use_dfs_guidance: bool = True
-    # 基本环基算法中，是否在补环后启用基本环基补全作为后备。默认True。
+    # Use fundamental basis fallback after partial basis construction. Default: True.
     fundamental_use_fallback: bool = True
-    # 基本环基算法中，是否构建生成树以支持基本环基和后备补全。默认True。
+    # Build spanning tree for fundamental basis support. Default: True.
     fundamental_build_spanning_tree: bool = True
-    # 是否打印详细的调试和进度信息。默认False。
+    # Print detailed debug/progress info. Default: False.
     verbose: bool = True
-    # 调试日志文件名。如果提供，会将调试信息写入此文件。
+    # Log filename for debug output.
     debug_log_file: Optional[str] = None
-    # 是否为每次运行生成单独的调试日志文件。默认False。
+    # Generate separate log file for each run. Default: False.
     generate_individual_log: bool = False
-    # 是否在汇总后删除单个的调试日志文件。此功能需在新的--task=consolidate_logs模式下使用。默认True。
+    # Delete individual logs after consolidation (used with --task=consolidate_logs). Default: True.
     delete_after_consolidate: bool = True
 
-    # 新增：回调函数接口
+    # New: Callback interfaces
     on_progress: Optional[Callable[[str, float], None]] = None
     on_complete: Optional[Callable[[Dict], None]] = None
 
@@ -934,13 +935,13 @@ class CycleBasisApp:
         self.progress_data = {}
         
     def _progress(self, stage: str, progress: float = 0.0) -> None:
-        """进度回调"""
+        """Progress callback"""
         self.progress_data[stage] = progress
         if self.cfg.on_progress:
             self.cfg.on_progress(stage, progress)
         
     def _debug_print(self, *args, **kwargs) -> None:
-        """统一的调试输出方法"""
+        """Unified debug printer"""
         msg = " ".join(str(arg) for arg in args)
         self.debug_output.append(msg)
         
@@ -948,7 +949,7 @@ class CycleBasisApp:
             print(*args, **kwargs)
             
     def _save_debug_log(self, log_file: Optional[str] = None) -> None:
-        """保存调试日志到文件"""
+        """Save debug log to file"""
         if log_file is None:
             log_file = self.cfg.debug_log_file
             
@@ -957,37 +958,37 @@ class CycleBasisApp:
                 with open(log_file, "w", encoding="utf-8") as f:
                     f.write("\n".join(self.debug_output))
                 if self.cfg.verbose:
-                    print(f"[DEBUG] 日志已保存到: {log_file}")
+                    print(f"[DEBUG] Log saved to: {log_file}")
             except Exception as e:
-                print(f"❌ 无法保存调试日志: {e}", file=sys.stderr)
+                print(f"❌ Failed to save log: {e}", file=sys.stderr)
                 
     def consolidate_logs(self, directory: str, consolidated_log_file: str) -> None:
-        """扫描目录，汇总所有 .delog 文件，然后选择性删除它们"""
-        self._debug_print(f"开始汇总日志文件于目录: {directory}")
+        """Scan directory, consolidate all .delog files, and optionally delete them."""
+        self._debug_print(f"Start consolidating logs in directory: {directory}")
         log_files = [f for f in os.listdir(directory) if f.endswith(".delog")]
 
         if not log_files:
-            self._debug_print("未找到 .delog 文件，无需汇总。")
+            self._debug_print("No .delog files found.")
             return
 
-        self._debug_print(f"找到 {len(log_files)} 个 .delog 文件: {log_files}")
+        self._debug_print(f"Found {len(log_files)} .delog files: {log_files}")
 
-        # 以追加模式打开汇总文件
+        # Open consolidated file in append mode
         with open(consolidated_log_file, "a", encoding="utf-8") as outfile:
             for filename in sorted(log_files):
                 filepath = os.path.join(directory, filename)
-                outfile.write(f"\n{'='*20} 内容来源: {filename} {'='*20}\n\n")
+                outfile.write(f"\n{'='*20} Source: {filename} {'='*20}\n\n")
                 try:
                     with open(filepath, "r", encoding="utf-8") as infile:
                         outfile.write(infile.read())
                     outfile.write("\n\n")
                 except Exception as e:
-                    outfile.write(f"*** 读取文件失败: {filepath}, 错误: {e} ***\n\n")
+                    outfile.write(f"*** Failed to read file: {filepath}, Error: {e} ***\n\n")
 
-        self._debug_print(f"所有日志已汇总到: {consolidated_log_file}")
+        self._debug_print(f"All logs consolidated to: {consolidated_log_file}")
 
         if self.cfg.delete_after_consolidate:
-            self._debug_print("开始删除单个 .delog 文件...")
+            self._debug_print("Deleting individual .delog files...")
             deleted_count = 0
             for filename in log_files:
                 filepath = os.path.join(directory, filename)
@@ -995,10 +996,10 @@ class CycleBasisApp:
                     os.remove(filepath)
                     deleted_count += 1
                 except Exception as e:
-                    self._debug_print(f"删除文件失败: {filepath}, 错误: {e}")
-            self._debug_print(f"成功删除 {deleted_count} 个 .delog 文件。")
+                    self._debug_print(f"Failed to delete file: {filepath}, Error: {e}")
+            self._debug_print(f"Successfully deleted {deleted_count} .delog files.")
         else:
-            self._debug_print("配置为保留单个 .delog 文件。")
+            self._debug_print("Individual .delog files preserved.")
 
     # -------- I/O --------
     def _read_input(self, input_file: str) -> List[List[str]]:
@@ -1009,13 +1010,13 @@ class CycleBasisApp:
         return lines
 
     def run_from_file(self, input_file: str, output_file: str) -> None:
-        """从文件运行完整流水线"""
+        """Run full pipeline from file input"""
         self._progress("start", 0.0)
-        self._debug_print(f"开始处理: {input_file}")
+        self._debug_print(f"Processing: {input_file}")
         
         start_time = time.time()
         
-        # 确定本次运行的日志文件名
+        # Determine log filename for this run
         log_file_to_use = self.cfg.debug_log_file
         if self.cfg.generate_individual_log:
             base_name = os.path.basename(input_file)
@@ -1028,7 +1029,7 @@ class CycleBasisApp:
 
             result_eids, beta, processor = self._execute_pipeline(lines)
             
-            # 还原节点顺序
+            # Reconstruct node order
             result_cycles: List[List[str]] = []
             for cyc_eids in result_eids:
                 path = CycleUtils.reconstruct_cycle_order_from_eids(
@@ -1043,13 +1044,13 @@ class CycleBasisApp:
             self._progress("write_output", 1.0)
 
         except Exception as e:
-            self._debug_print(f"处理失败: {input_file}, 错误: {e}")
+            self._debug_print(f"Process failed: {input_file}, Error: {e}")
             import traceback
             self._debug_print(traceback.format_exc())
         finally:
             end_time = time.time()
             duration = end_time - start_time
-            self._debug_print(f"处理完成: {input_file}, 耗时: {duration:.2f}s")
+            self._debug_print(f"Completed: {input_file}, Duration: {duration:.2f}s")
             
             final_stats = {
                 "input_file": input_file,
@@ -1058,19 +1059,19 @@ class CycleBasisApp:
                 "progress": self.progress_data,
             }
             
-            # 使用本次运行确定的日志文件名
+            # Use the determined log filename
             if log_file_to_use:
                 self._save_debug_log(log_file_to_use)
             
             self._complete(final_stats)
 
     def _complete(self, stats: Dict) -> None:
-        """完成回调"""
+        """Completion callback"""
         if self.cfg.on_complete:
             self.cfg.on_complete(stats)
         
     def _read_input_from_text(self, text: str) -> List[List[str]]:
-        """从文本字符串读取输入数据"""
+        """Read input from text string"""
         raw_lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
         lines = [re.split(r"[,\s]+", line) for line in raw_lines]
         lines = [list(filter(None, row)) for row in lines]
@@ -1087,7 +1088,7 @@ class CycleBasisApp:
                 f.write(f"{len(nodes_clean)} {' '.join(nodes_clean)}\n")
                 
     def _format_result(self, result_cycles: List[List[str]]) -> str:
-        """将结果格式化为字符串"""
+        """Format result as string"""
         lines = [f"{len(result_cycles)}"]
         for cycle_nodes in result_cycles:
             if self.cfg.output_pad_to_int:
@@ -1107,20 +1108,20 @@ class CycleBasisApp:
         self._debug_print("DEBUG dfs_dirs_by_edge:", len(processor.dfs_dirs_by_edge))
         self._debug_print("==================================")
         for k in sorted(cycles_by_len):
-            self._debug_print(f"最小环基类型数量  C{k}: {len(cycles_by_len[k])} cycles")
+            self._debug_print(f"Cycle count C{k}: {len(cycles_by_len[k])} cycles")
         self._debug_print("==================================")
-        self._debug_print("最小环基目标 beta:", beta)
+        self._debug_print("Target Rank (beta):", beta)
         self._debug_print("==================================")
 
     def _execute_pipeline(self, lines: List[List[str]]) -> Tuple[List[FrozenSet[int]], int, InputDataProcessor]:
-        """执行核心算法流水线，返回(环基, beta, processor)"""
+        """Execute core pipeline, returning (basis, beta, processor)"""
         processor = InputDataProcessor(lines)
         self._progress("build_processor", 0.2)
 
         edge_cnt = len(processor.undirected_edge2_single_str)
         
         if edge_cnt > self.cfg.max_edges:
-            raise MemoryError(f"边数 {edge_cnt} 超过限制 {self.cfg.max_edges}")
+            raise MemoryError(f"Edge count {edge_cnt} exceeds limit {self.cfg.max_edges}")
 
         beta = processor.minimal_cycle_count()
         self._progress("calc_beta", 0.3)
@@ -1128,9 +1129,9 @@ class CycleBasisApp:
         if beta == 0:
             return [], 0, processor
 
-        # -------- 强制 fundamental-only 模式 --------
+        # -------- Force fundamental-only mode --------
         if self.cfg.force_fundamental_only:
-            self._debug_print("强制使用 fundamental-only 模式")
+            self._debug_print("Forcing fundamental-only mode")
             builder = CycleBasisBuilder(
                 adjacency_map=processor.adjacency_map,
                 edge_index_map=processor.edge_index_map,
@@ -1140,7 +1141,7 @@ class CycleBasisApp:
             fundamental_basis = builder.build_fundamental_basis()
             return fundamental_basis[:beta], beta, processor
 
-        # -------- 阶段1: 枚举 C3-C5 + 引导式 DFS 找 C6-C9 --------
+        # -------- Phase 1: Enumerate C3-C5 + Guided DFS for C6-C9 --------
         cycles_by_len = processor.enumerate_cycles(induced_only=self.cfg.induced_only)
         self._progress("enum_c3_c5", 0.5)
         
@@ -1166,7 +1167,7 @@ class CycleBasisApp:
         for k, v in added_cycles.items():
             cycles_by_len[k].update(v)
 
-        # -------- 阶段2: 独立环筛选 --------
+        # -------- Phase 2: Independent Cycle Selection --------
         selector = SimpleIndependentCycleSelector(
             cycles_by_len=cycles_by_len,
             eid_to_edge=processor.eid_to_edge,
@@ -1178,9 +1179,9 @@ class CycleBasisApp:
         independent_cycles, is_complete = selector.run()
         self._progress("select_independent", 0.8)
 
-        # -------- 阶段3: 补全环基 --------
+        # -------- Phase 3: Complete the basis --------
         if not is_complete:
-            self._debug_print("环基不完整，开始补全...")
+            self._debug_print("Basis incomplete, supplementing...")
             builder = CycleBasisBuilder(
                 adjacency_map=processor.adjacency_map,
                 edge_index_map=processor.edge_index_map,
@@ -1193,7 +1194,7 @@ class CycleBasisApp:
                 basis_cycles=independent_cycles,
                 target_rank=beta,
             )
-            self._debug_print(f"补全完成，新增 {added_count} 个环。")
+            self._debug_print(f"Supplement complete, added {added_count} cycles.")
             independent_cycles = completed_basis
         
         self._progress("complete_basis", 0.85)
@@ -1201,49 +1202,180 @@ class CycleBasisApp:
         return independent_cycles, beta, processor
 
 
+    def run_on_networkx_graph(self, G) -> List[List[Any]]:
+        """
+        Execute pipeline directly on a NetworkX graph.
+        
+        Parameters
+        ----------
+        G : networkx.Graph
+            Input graph
+            
+        Returns
+        -------
+        list[list[Any]]
+            List of cycles, where each cycle is a list of node IDs (original type).
+        """
+        start_time = time.time()
+        self._progress("start", 0.0)
+        
+        # 1. Adapt NetworkX graph to internal lines format (List[List[str]])
+        # Node mapping: original obj -> internal str
+        # We need to map back at the end.
+        
+        # We'll use str() for internal processing, but keep a map if nodes aren't strings
+        # However, InputDataProcessor expects "lines" of connectivity. 
+        # A simpler way is to construct InputDataProcessor directly or adapt input lines.
+        # Let's produce the "lines" format: each line is "u v".
+        
+        # Map original nodes to strings safely
+        node_map_to_str = {}
+        node_map_from_str = {}
+        
+        # To ensure consistent string representation (e.g. for integers), handle them carefully.
+        # The easiest way: Assign a unique integer ID to each node first, then stringify.
+        
+        for i, n in enumerate(G.nodes()):
+            s = str(i) # Use index as string ID
+            node_map_to_str[n] = s
+            node_map_from_str[s] = n
+            
+        lines: List[List[str]] = []
+        for u, v in G.edges():
+            lines.append([node_map_to_str[u], node_map_to_str[v]])
+            
+        try:
+            result_eids, beta, processor = self._execute_pipeline(lines)
+            
+            # Reconstruct cycles
+            result_cycles: List[List[Any]] = []
+            for cyc_eids in result_eids:
+                path_strs = CycleUtils.reconstruct_cycle_order_from_eids(
+                    list(cyc_eids), processor.eid_to_edge
+                )
+                if path_strs:
+                    # Map back to original nodes
+                    # path_strs are stringified indices like "0", "1"... (with some padding from processor)
+                    # InputDataProcessor pads with zeros! We need to handle that.
+                    
+                    # processor.node_index_map maps padded_str -> int_id (1-based)
+                    # wait, processor rebuilds its own logic.
+                    # The `path_strs` are keys in `processor.adjacency_map`.
+                    # Let's look at `InputDataProcessor._build_graph`.
+                    # It calls `zfill(pad_width)`. 
+                    
+                    # We need to unpad carefully.
+                    # Since we fed "0", "1", "10", the processor might pad them to "00", "01", "10".
+                    
+                    # Robust mapping back:
+                    # processor used input strings to create internal padded strings.
+                    # But we don't easily know the mapping unless we track it or reverse `int(s)`.
+                    # Our input to processor was `str(index)`. Processor converts to int, finds max, then zfills.
+                    
+                    cycle_nodes_original = []
+                    for s in path_strs:
+                        # s is padded string. int(s) gives the original index we passed.
+                        idx = int(s)
+                        # map back index -> original node
+                        # We need to access the node by index from `enumerate(G.nodes())` order
+                        # node_map_from_str uses "0", "1" (unpadded).
+                        original_node = node_map_from_str[str(idx)]
+                        cycle_nodes_original.append(original_node)
+                    
+                    result_cycles.append(cycle_nodes_original)
+                    
+            self._progress("complete", 1.0)
+            return result_cycles
+            
+        except Exception as e:
+            self._debug_print(f"Graph processing failed: {e}")
+            import traceback
+            self._debug_print(traceback.format_exc())
+            return []
+
+# =====================================================
+# NetworkX Adapter (Drop-in replacement)
+# =====================================================
+def minimum_cycle_basis_heuristic(G, weight=None) -> List[List[Any]]:
+    """
+    Compute an approximate Minimum Cycle Basis (MCB) for a graph G.
+    
+    This function is designed to be a high-performance, drop-in replacement
+    algorithm for `networkx.minimum_cycle_basis`, especially optimized for
+    sparse, planar-like, or large graphs.
+    
+    Parameters
+    ----------
+    G : NetworkX Graph
+        The input graph (undirected).
+    weight : str, optional
+        (Ignored) Edge attribute to use for edge weights. 
+        Currently this heuristic assumes unweighted MCB (shortest length).
+
+    Returns
+    -------
+    list[list]
+         A list of cycles. Each cycle is a list of nodes.
+    
+    Examples
+    --------
+    >>> import networkx as nx
+    >>> G = nx.grid_2d_graph(10, 10)
+    >>> basis = minimum_cycle_basis_heuristic(G)
+    >>> len(basis)
+    81
+    """
+    config = AppConfig(
+        verbose=False, 
+        induced_only=True,
+        dfs_max_len=9
+    )
+    app = CycleBasisApp(config)
+    return app.run_on_networkx_graph(G)
+
+
 def main():
-    """主函数入口"""
-    parser = argparse.ArgumentParser(description="在图中寻找最短的独立环基。")
+    """Main entry point"""
+    parser = argparse.ArgumentParser(description="Find Minimum Cycle Basis (MCB) in a graph.")
     
-    # 核心任务参数
+    # Core Task Arguments
     parser.add_argument("--task", type=str, default="run", choices=["run", "consolidate_logs"],
-                        help="要执行的任务: 'run' (处理输入文件) 或 'consolidate_logs' (汇总日志文件)。")
+                        help="Task to execute: 'run' (process input) or 'consolidate_logs'.")
     
-    # 'run' 任务的参数
-    parser.add_argument("--input", "-i", type=str, help="输入文件路径 (当 task='run' 时必需)。")
-    parser.add_argument("--output", "-o", type=str, help="输出文件路径 (当 task='run' 时必需)。")
+    # 'run' task arguments
+    parser.add_argument("--input", "-i", type=str, help="Input file path (required for task='run').")
+    parser.add_argument("--output", "-o", type=str, help="Output file path (required for task='run').")
     
-    # 兼容位置参数调用方式: python solution.py input_file output_file
-    parser.add_argument("input_pos", nargs="?", help="输入文件路径 (位置参数)")
-    parser.add_argument("output_pos", nargs="?", help="输出文件路径 (位置参数)")
+    # Positional args compatibility: python solution.py input_file output_file
+    parser.add_argument("input_pos", nargs="?", help="Input file path (positional)")
+    parser.add_argument("output_pos", nargs="?", help="Output file path (positional)")
 
-    # 'consolidate_logs' 任务的参数
+    # 'consolidate_logs' task arguments
     parser.add_argument("--log_dir", type=str, default=".", 
-                        help="包含 .delog 文件的目录 (当 task='consolidate_logs' 时使用)。")
+                        help="Directory containing .delog files (for 'consolidate_logs').")
     parser.add_argument("--consolidated_log", type=str, default="consolidated_debug.log",
-                        help="统一的汇总日志文件名 (当 task='consolidate_logs' 时使用)。")
+                        help="Consolidated log filename (for 'consolidate_logs').")
 
-    # 从 AppConfig 动态添加参数
+    # AppConfig dynamic arguments
     for field in fields(AppConfig):
         if field.name in ["on_progress", "on_complete"]:
             continue
         
         arg_name = f"--{field.name.replace('_', '-')}"
         
-        # 处理类型注解可能是字符串的情况 (from __future__ import annotations)
+        # Handle type annotation being string (from __future__ import annotations)
         is_bool = field.type is bool or (isinstance(field.type, str) and field.type == "bool")
         
         if is_bool:
-            # 对于布尔开关，我们使用 store_true 和 store_false
+            # For boolean flags, use store_true and store_false pair (or similar)
             if field.default:
-                parser.add_argument(f"--no-{field.name.replace('_', '-')}", dest=field.name, action="store_false", help=f"禁用 {field.name}")
-                # 保持 -- 参数，但需要确保它不会与 --no- 冲突
+                parser.add_argument(f"--no-{field.name.replace('_', '-')}", dest=field.name, action="store_false", help=f"Disable {field.name}")
+                # Keep -- arg, but ensure it doesn't conflict
                 parser.set_defaults(**{field.name: True})
             else:
-                parser.add_argument(arg_name, dest=field.name, action="store_true", help=f"启用 {field.name}")
+                parser.add_argument(arg_name, dest=field.name, action="store_true", help=f"Enable {field.name}")
         else:
-            # 处理 int, float, str 以及它们的字符串形式
-            # 默认为 str，避免 Optional[str] 或其他复杂类型导致 argparse 报错
+            # Handle int, float, str
             arg_type = str
             raw_type = field.type
             
@@ -1252,11 +1384,11 @@ def main():
             elif raw_type is float or (isinstance(raw_type, str) and raw_type == "float"):
                 arg_type = float
 
-            parser.add_argument(arg_name, type=arg_type, default=field.default, help=f"设置 {field.name} (默认: {field.default})")
+            parser.add_argument(arg_name, type=arg_type, default=field.default, help=f"Set {field.name} (default: {field.default})")
 
     args = parser.parse_args()
 
-    # 将解析的参数传递给 AppConfig
+    # Pass parsed args to AppConfig
     config_dict = {f.name: getattr(args, f.name) for f in fields(AppConfig) if f.name in args}
     config = AppConfig(**config_dict)
     
@@ -1267,15 +1399,15 @@ def main():
         output_file = args.output or args.output_pos
         
         if not input_file or not output_file:
-            parser.error("必须指定输入和输出文件 (通过位置参数或 --input/--output)。")
+            parser.error("Must specify input and output files (via positional args or --input/--output).")
         app.run_from_file(input_file, output_file)
     elif args.task == "consolidate_logs":
-        # 在汇总前，清空一次总日志文件，以防重复追加
+        # Clear consolidated log file once before consolidation
         if os.path.exists(args.consolidated_log):
             open(args.consolidated_log, 'w').close()
         app.consolidate_logs(args.log_dir, args.consolidated_log)
     else:
-        parser.error(f"未知的任务: {args.task}")
+        parser.error(f"Unknown task: {args.task}")
 
 
 if __name__ == "__main__":

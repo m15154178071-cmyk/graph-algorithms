@@ -1,8 +1,16 @@
-import time
+
+# =============================
+# 最小环基（MCB）性能基准脚本
+# 对比 NetworkX、rustworkx、你的算法
+# =============================
+
+import time  # 计时用
 import random
 import os
 import sys
 
+
+# 导入 NetworkX（纯Python图论库）
 try:
     import networkx as nx
 except ImportError:
@@ -10,51 +18,61 @@ except ImportError:
     print("  pip install networkx")
     sys.exit(1)
 
+
+# 尝试导入 igraph（C实现，MCB，需VC++运行库，常见DLL问题）
 try:
     import igraph as ig
 except (ImportError, OSError) as e:
     print(f"警告: 无法加载 igraph 库 ({e})，无法对比 igraph 性能。")
     ig = None
 
+
+# 尝试导入 rustworkx（Rust实现，极快，cycle_basis为FCB）
 try:
     import rustworkx as rx
 except (ImportError, OSError):
     rx = None
 
-# 引入你的 enhanced 版本逻辑
-# 假设 solution_enhanced.py 在同一目录下，且我们要调用其中的 InputDataProcessor, SimpleIndependentCycleSelector 等
-# 为了方便调用，我们稍微 wrap 一下你的代码逻辑
+
+# 引入你的高性能 MCB 算法（solution_enhanced.py）
+# 需确保同目录下有 solution_enhanced.py 文件
 try:
     from solution_enhanced import InputDataProcessor, SimpleIndependentCycleSelector, CycleBasisBuilder, GuidedDFSFinder, CycleUtils
 except ImportError:
     print("错误: 未找到 solution_enhanced.py，请确保该文件在当前目录下。")
     sys.exit(1)
 
+
+# =============================
+# 你的 MCB 算法主流程封装
+# 输入：边列表、节点数
+# 输出：每个环的长度（用于统计总权重）
+# =============================
 def run_my_mcb_algorithm(edges, num_nodes):
     """
     封装你的算法调用过程。
-    由于你的代码是基于 InputDataProcessor读取 lines 的，我们需要构造类似于文件输入的 lines 结构。
+    由于你的代码是基于 InputDataProcessor 读取 lines 的，我们需要构造类似于文件输入的 lines 结构。
     """
-    # 构造模拟输入：lines = [[u, v], [u, v], ...]
-    # 注意：你的 InputDataProcessor 期望的是字符串或者是数字，我们统一转成 list of lists
+    # 1. 构造模拟输入：lines = [[u, v], [u, v], ...]，全部转成字符串
     lines = [[str(u), str(v)] for u, v in edges]
-    
-    # 1. Pipeline 初始化
+
+    # 2. 初始化数据处理器，计算最小环基的理论数量 beta
     processor = InputDataProcessor(lines)
     beta = processor.minimal_cycle_count()
     if beta == 0:
         return []
 
-    # 2. 阶段1: 枚举 + 引导式 DFS
-    # 这里模拟 solution_enhanced.py _execute_pipeline 的主要逻辑
-    # 配置参数（硬编码模拟 AppConfig）
-    cfg_induced_only = True
-    cfg_dfs_min_len = 6
-    cfg_dfs_max_len = 15 # 这里的 max_len 可以适当调大以应对随机图
-    cfg_dfs_per_edge_limit = 3
-    
+    # 3. 阶段1：枚举短环 + 引导式DFS补充长环
+    # 配置参数（可根据实际调整）
+    cfg_induced_only = True  # 只枚举诱导环
+    cfg_dfs_min_len = 6      # DFS枚举的最小环长
+    cfg_dfs_max_len = 15     # DFS枚举的最大环长
+    cfg_dfs_per_edge_limit = 3  # 每条边DFS补充环的数量上限
+
+    # 3.1 枚举所有短环（C3~C5）
     cycles_by_len = processor.enumerate_cycles(induced_only=cfg_induced_only)
-    
+
+    # 3.2 用引导式DFS补充长环
     finder = GuidedDFSFinder(
         adjacency_map=processor.adjacency_map,
         edge_index_map=processor.edge_index_map,
@@ -62,18 +80,16 @@ def run_my_mcb_algorithm(edges, num_nodes):
         undirected_edges=processor.undirected_edge2_single_str,
         dfs_dirs_by_edge=processor.dfs_dirs_by_edge,
     )
-    
     added_cycles = finder.guided_supplement(
         base_cycles_by_len=cycles_by_len,
         min_len=cfg_dfs_min_len,
         max_len=cfg_dfs_max_len,
         per_edge_limit=cfg_dfs_per_edge_limit,
     )
-    
     for k, v in added_cycles.items():
         cycles_by_len[k].update(v)
 
-    # 3. 阶段2: 独立环筛选
+    # 4. 阶段2：独立环筛选（GF(2)消元，选出线性无关的环）
     selector = SimpleIndependentCycleSelector(
         cycles_by_len=cycles_by_len,
         eid_to_edge=processor.eid_to_edge,
@@ -83,7 +99,7 @@ def run_my_mcb_algorithm(edges, num_nodes):
     )
     independent_cycles, is_complete = selector.run()
 
-    # 4. 阶段3: 补全环基
+    # 5. 阶段3：如未满秩则用DFS补全环基
     if not is_complete:
         builder = CycleBasisBuilder(
             adjacency_map=processor.adjacency_map,
@@ -98,80 +114,72 @@ def run_my_mcb_algorithm(edges, num_nodes):
             target_rank=beta,
         )
         independent_cycles = completed_basis
-    
-    # 5. 为了对比，我们返回环的长度列表（总权重）
-    # cycle 是 eids 的 frozenset，转成长度很简单
+
+    # 6. 返回每个环的长度（用于统计总权重）
     return [len(c) for c in independent_cycles]
 
+
+# =============================
+# 单个测试用例的基准测试流程
+# 输入：用例名、networkx图对象
+# =============================
 def benchmark_one_case(case_name, G):
     """
-    运行单个测试用例
-    case_name: 描述
-    G: networkx Graph 对象
+    运行单个测试用例，分别用 NetworkX、igraph、rustworkx、你的算法求最小环基并计时。
+    输出每种方法的用时、环基权重、环数，并对比加速比。
     """
     print(f"\n--- {case_name} ---")
     print(f"节点数: {G.number_of_nodes()}, 边数: {G.number_of_edges()}")
 
-    # 准备数据
+    # 1. 准备边数据
     edges = list(G.edges())
-    # 你的算法需要节点映射到 1..N 这种或者字符串，这里直接用 G.edges() 的 int/str 都可以，
-    # 只要 run_my_mcb 里的 InputProcessor 能处理。InputProcessor 处理 str(int) 没问题。
+    # 你的算法需要节点映射到字符串或整数，InputProcessor 兼容 str(int)
 
-    # --- Run NetworkX ---
+    # 2. NetworkX 求最小环基
     start_nx = time.time()
-    # networkx返回的是 list of list of nodes
     nx_basis = nx.minimum_cycle_basis(G)
     end_nx = time.time()
-    
     nx_time = end_nx - start_nx
     nx_total_len = sum(len(c) for c in nx_basis)
     print(f"[NetworkX]   Time: {nx_time:.4f}s | Basis Weight: {nx_total_len} | Count: {len(nx_basis)}")
 
-    # --- Run igraph (if available) ---
+    # 3. igraph（如可用）
     ig_time = -1.0
     if ig is not None:
         try:
-            # 转换 NetworkX 图到 igraph
-            # 注意：igraph 的节点 ID 必须是连续整数 0..N-1，这里简单起见我们只传边列表
-            # NetworkX 的 convert_node_labels_to_integers 通常已经保证了 0..N-1
-            # 但为了通用，我们重新建立映射
+            # igraph 节点必须是 0..N-1，需重映射
             mapping = {n: i for i, n in enumerate(G.nodes())}
             ig_edges = [(mapping[u], mapping[v]) for u, v in edges]
             g_ig = ig.Graph(n=len(mapping), edges=ig_edges, directed=False)
-            
+
             start_ig = time.time()
-            # igraph 的 result 是 edge IDs 的 list of lists，或者 vertex lists
-            # minimum_cycle_basis 方法返回 edge IDs
-            # use_cycle_basis=True 可能会启用优化
-            ig_basis_node_lists = g_ig.minimum_cycle_basis(use_cycle_basis=True)
+            # minimum_cycle_basis 通常返回边的索引列表，不需特殊参数
+            ig_basis_node_lists = g_ig.minimum_cycle_basis()
             end_ig = time.time()
-            
+
             ig_time = end_ig - start_ig
-            # igraph 返回的是 node list，直接 len 即可
             ig_total_len = sum(len(c) for c in ig_basis_node_lists)
             print(f"[igraph (C)] Time: {ig_time:.4f}s | Basis Weight: {ig_total_len} | Count: {len(ig_basis_node_lists)}")
 
         except Exception as e:
             print(f"[igraph] Failed: {e}")
 
-    # --- Run rustworkx (if available) ---
+    # 4. rustworkx（如可用，FCB，仅作性能参考）
     rx_time = -1.0
     if rx is not None:
         try:
-            # Construct rustworkx graph
-            # mapping matches 0..N-1
+            # rustworkx 节点同样需 0..N-1
             mapping_rx = {n: i for i, n in enumerate(G.nodes())}
             py_graph = rx.PyGraph()
             py_graph.add_nodes_from(range(len(G.nodes())))
             edge_list_rx = [(mapping_rx[u], mapping_rx[v]) for u, v in edges]
             py_graph.add_edges_from_no_data(edge_list_rx)
-            
+
             start_rx = time.time()
-            # Note: rx.cycle_basis is usually Fundamental Cycle Basis (FCB), NOT Minimum Cycle Basis (MCB).
-            # It serves as a performance baseline for compiled graph traversal.
+            # cycle_basis 返回 FCB，速度极快但权重不最优
             rx_basis = rx.cycle_basis(py_graph)
             end_rx = time.time()
-            
+
             rx_time = end_rx - start_rx
             rx_total_len = sum(len(c) for c in rx_basis)
             print(f"[rustworkx (Rust)] Time: {rx_time:.4f}s | Basis Weight: {rx_total_len} | Count: {len(rx_basis)} (Note: Likely FCB, not MCB)")
@@ -179,28 +187,29 @@ def benchmark_one_case(case_name, G):
         except Exception as e:
             print(f"[rustworkx] Failed: {e}")
 
-    # --- Run My Algo ---
+    # 5. 你的算法
     start_my = time.time()
     try:
         my_basis_lengths = run_my_mcb_algorithm(edges, G.number_of_nodes())
         end_my = time.time()
-        
+
         my_time = end_my - start_my
         my_total_len = sum(my_basis_lengths)
         print(f"[My Algorithm] Time: {my_time:.4f}s | Basis Weight: {my_total_len} | Count: {len(my_basis_lengths)}")
-        
-        # --- Comparison ---
+
+        # 6. 性能对比
         speedup_nx = nx_time / my_time if my_time > 0 else 0.0
         print(f"Speedup vs NetworkX: {speedup_nx:.2f}x")
-        
+
         if ig_time > 0:
             speedup_ig = ig_time / my_time if my_time > 0 else 0.0
             print(f"Speedup vs igraph:   {speedup_ig:.2f}x (My Algo is {'FASTER' if speedup_ig > 1 else 'slower'})")
-        
+
         if rx_time > 0:
             speedup_rx = rx_time / my_time if my_time > 0 else 0.0
             print(f"Speedup vs rustworkx:{speedup_rx:.2f}x (My Algo is {'FASTER' if speedup_rx > 1 else 'slower'})")
-        
+
+        # 7. 正确性校验
         if nx_total_len == my_total_len:
             print("✅ 正确性验证通过 (vs NX)")
         else:
