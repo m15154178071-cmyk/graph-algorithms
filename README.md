@@ -1,48 +1,71 @@
-# Minimum Cycle Basis Algorithm
+# MCB Project (Minimum Cycle Basis and Graph Analysis)
 
-This repository contains Python implementations for the **Minimum Cycle Basis (MCB)** problem in undirected graphs. It includes two versions suitable for different performance requirements and study purposes.
+[中文说明](#项目介绍) | [English Description](#english-description)
 
-## Files
+---
 
-### 1. `solution_basic.py` (Prototype)
-- **Description**: A basic implementation focusing on algorithmic logic.
-- **Features**: 
-  - Standard GF(2) Gaussian elimination.
-  - Basic cycle enumeration (C3/C4).
-  - Clean and flat structure, ideal for learning the core concepts.
-- **Usage**: Good for small graphs and educational purposes.
+## <a id="项目介绍"></a>项目介绍
 
-### 2. `solution_enhanced.py` (Production Ready)
-- **Description**: An optimized, engineered version designed for performance.
-- **Features**: 
-  - **O(1) Tree Path XOR**: Optimizes the fundamental cycle calculation using precomputed root-to-node XOR masks.
-  - **C3-C5 Enumeration**: Explicitly enumerates cycles up to length 5.
-  - **Guided DFS**: Uses structural information (H-structure) to guide Deep First Search for longer cycles (C6+).
-  - **Robustness**: Includes strict "induced cycle" checks and memory management.
-- **Usage**: Recommended for competitive programming or processing medium-to-large graphs (10k - 500k edges).
+这是一个基于 Python 的图论分析工具，专门用于无向图的结构分析。主要功能包括构建图的邻接表、识别特定长度的环（如 C3、C4 结构），以及提取图的最小环基（Minimum Cycle Basis）。该工具适用于需要对复杂网络结构进行拓扑分析的场景。
 
-## Performance Benchmarks
+### 主要功能
 
-Benchmarks run on Windows (Python 3.13) comparing `solution_enhanced.py` against `NetworkX` (v3.x) and `rustworkx` (compiled Rust).
+1.  **图构建与预处理**：
+    -   支持从输入数据读取边列表，自动处理节点编号并进行格式化（zero-padding）。
+    -   构建高效的邻接表和边索引映射。
+2.  **环基提取 (Cycle Basis Extraction)**：
+    -   实现了提取线性无关环的算法。
+    -   支持基于位掩码（Bitmask）的线性无关性检测，确保提取的环构成图的基。
+3.  **短环结构分析**：
+    -   专门针对 C3（三角形）和 C4（四边形）等短环结构进行识别和分类。
+4.  **路径与环还原**：
+    -   提供了从边 ID 集合还原节点顺序的功能，便于可视化或进一步分析。
 
-| Graph Type | Size | NetworkX (Python) | My Algorithm (Python) | Speedup (vs NX) |
-| :--- | :--- | :--- | :--- | :--- |
-| **Grid Graph (10x10)** | 100 nodes, 180 edges | 1.4537s | **0.0042s** | **343x** |
-| **Random (p=0.08)** | 100 nodes, 372 edges | 10.0670s | **0.0818s** | **123x** |
-| **Sparse (p=0.15)** | 50 nodes, 179 edges | 1.2035s | **0.0429s** | **28x** |
-| **Wheel (n=30)** | 30 nodes, 58 edges | 0.0655s | **0.0072s** | **9x** |
+### 如何使用
 
-**Note on Compiled Libraries:**
-We also compared against `rustworkx` (written in Rust). While `rustworkx` is extremely fast (~0.0001s), it currently only supports **Fundamental Cycle Basis (FCB)**, not Minimum Cycle Basis (MCB).
-- **Quality Difference**: On the 10x10 Grid Graph, our MCB weight is **324** (optimal), while `rustworkx`'s FCB weight is **676** (suboptimal).
-- **Conclusion**: This implementation offers **300x speedups** over NetworkX while maintaining mathematical optimality, effectively bridging the gap between pure Python and compiled solutions for MCB problems.
+该项目主要是作为一个算法脚本运行。
 
-## How to Run
+#### 依赖环境
+- Python 3.8+ (建议)
+- 仅依赖 Python 标准库（`collections`, `itertools`, `typing` 等），无需安装额外的第三方包。
+
+#### 运行方式
+通常该脚本通过标准输入或文件读取图数据。具体使用方法取决于您的入口点（例如 `main` 函数的调用方式）。
 
 ```bash
-python solution_enhanced.py input.txt output.txt
+python solution_basic.py
 ```
 
-## Requirements
-- Python 3.8+
-- No external dependencies (standard library only).
+---
+
+## <a id="english-description"></a>English Description
+
+This project is a Python-based graph theory analysis tool designed for analyzing the structure of undirected graphs. Its core functionalities include building graph adjacency lists, identifying specific cycle structures (like C3, C4), and extracting the Minimum Cycle Basis (MCB) of a graph. It is suitable for scenarios requiring topological analysis of complex networks.
+
+### Features
+
+1.  **Graph Construction & Preprocessing**:
+    -   Reads edge lists from input, automatically handling node indexing and formatting (zero-padding).
+    -   Builds efficient adjacency maps and edge index mappings.
+2.  **Cycle Basis Extraction**:
+    -   Implements algorithms to extract linearly independent cycles.
+    -   Uses bitmask-based linear independence detection to ensure the extracted cycles form a basis for the graph.
+3.  **Short Cycle Analysis**:
+    -   Specialized identification and classification for short cycle structures like C3 (triangles) and C4 (quadrilaterals).
+4.  **Path & Cycle Reconstruction**:
+    -   Provides functionality to reconstruct node sequences from sets of Edge IDs, facilitating visualization or further analysis.
+
+### How to Use
+
+The project is primarily designed to run as an algorithm script.
+
+#### Requirements
+- Python 3.8+ (Recommended)
+- Depends only on the Python Standard Library (`collections`, `itertools`, `typing`, etc.), no external packages required.
+
+#### Usage
+Typically, the script reads graph data via standard input or files.
+
+```bash
+python solution_basic.py
+```

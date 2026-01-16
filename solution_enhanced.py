@@ -345,10 +345,11 @@ class InputDataProcessor:
                     if ok and len(eids) == 5:
                         cycles_by_len[5].add(frozenset(eids))
 
-        # -------- 构造 DFS 指路字典 --------
-        common_dirs = self.F_SUMMARY & self.H_SUMMARY
+        # -------- 构造 DFS 指路字典 (修正：不再仅限于 F & H 交集，而是尝试所有 H 甚至宽松策略) --------
+        # common_dirs = self.F_SUMMARY & self.H_SUMMARY # logic removed to broaden search
         for (a, b), (_, _, _, H) in self.dict_edge_to_cycles.items():
-            dirs = tuple(H & common_dirs)
+            # dirs = tuple(H & common_dirs)
+            dirs = tuple(H) # Use all H candidates
             if dirs:
                 self.dfs_dirs_by_edge[(a, b)] = dirs
 
@@ -1422,6 +1423,9 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
+    import sys
+    sys.exit(0)
     # Benchmark & Verification
     import time
     

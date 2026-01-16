@@ -1,1079 +1,606 @@
-import os
-# ===== locale 兜底（华为评测必加）=====
-os.environ['LC_ALL'] = 'C'
-os.environ['LANG'] = 'C'
 import sys
+import time
+import random
+import re
+from collections import deque, defaultdict
 import itertools
-from collections import Counter
-from collections import defaultdict
-from typing import Any
-from collections import deque
-# import re
-# import time
 
+# Increase recursion depth just in case
+sys.setrecursionlimit(20000)
 
-def reconstruct_cycle_order_from_eids(cycle_eids, eid_to_edge):
+class DataHelper:
+    @staticmethod
+    def read_edges(filepath):
+        edges = []
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line: continue
+                parts = re.split(r'[,\s]+', line)
+                if len(parts) >= 2:
+                    try:
+                        u, v = int(parts[0]), int(parts[1])
+                        if u != v:
+                            edges.append((min(u, v), max(u, v)))
+                    except:
+                        pass
+        return edges
+
+class LinearBasis:
     """
-    从一组 eids 还原一个合法 simple cycle 的节点顺序
-    返回: [v1, v2, ..., v1]
+    Maintains a linear basis of cycles using a pivot-based approach (Gaussian Elimination).
+    Cycles are treated as vectors in GF(2), represented by sets of edge IDs.
     """
-    adj = defaultdict(list)
-    for eid in cycle_eids:
-        u, v = eid_to_edge[eid]
-        adj[u].append(v)
-        adj[v].append(u)
+    def __init__(self, num_edges):
+        self.basis = {} # pivot_edge_id -> cycle_as_set
+        self.num_edges = num_edges
+        self.basis_count = 0
 
-    if not adj:
-        return None
-
-    # simple cycle：每个点度应为 2
-    for x, ns in adj.items():
-        if len(ns) != 2:
-            return None
-
-    start = next(iter(adj))
-    path = [start]
-    prev = None
-    curr = start
-
-    while True:
-        n0, n1 = adj[curr]
-        if prev is None:
-            nxt = n0
-        else:
-            nxt = n0 if n1 == prev else n1
-
-        if nxt == start:
-            path.append(start)
-            break
-
-        # 防死循环（异常数据兜底）
-        if nxt in path:
-            return None
-
-        path.append(nxt)
-        prev, curr = curr, nxt
-
-    return path
-
-def extract_independent_cycle_basis_bitmask(cycles_by_len, target_rank=None):
-    """
-    输入: cycles_by_len[k] = set[frozenset[eid]]
-    输出: list[frozenset[eid]] 线性无关环（按短到长取）
-    """
-    basis = {}        # pivot_bit -> reduced_mask
-    out = []
-    out_set = set()
-
-    def reduce_mask(m: int) -> int:
-        while m:
-            pivot = m & -m
-            b = basis.get(pivot)
-            if b is None:
-                break
-            m ^= b
-        return m
-
-    for k in sorted(cycles_by_len.keys()):
-        for cyc in cycles_by_len[k]:
-            if cyc in out_set:
-                continue
-            m = 0
-            for eid in cyc:
-                m ^= (1 << eid)
-
-            r = reduce_mask(m)
-            if not r:
-                continue
-
-            pivot = r & -r
-            basis[pivot] = r
-            out.append(cyc)
-            out_set.add(cyc)
-
-            if target_rank is not None and len(out) >= target_rank:
-                return out[:target_rank]
-
-    return out
-
-# ===== cycle type constants =====
-
-class InputDataProcessor:
-    """
-    统一管线（最终可用版）：
-
-    - 无向图 + adjacency(set)
-    - edge_index_map：无向边 -> eid（int, 1-based）
-    - 路径生长法统一枚举 C3 / C4 / C5 / C6 / ...
-    - 环用 frozenset(eids) 表示，天然去重
-    - 可选 induced_only：只保留无弦环（诱导环）
-    """
-
-    # =====================================================
-    # 初始化
-    # =====================================================
-    def __init__(self, lines):
-        self.lines = lines
-        self.debug: bool = False
-        self.pad_width: int | None = None
-
-        # 图结构
-        self.undirected_edge4_set_str: set[tuple[str, str, str, str]] = set()
-        self.undirected_edge2_set_str: set[tuple[str, str]] = set()
-        self.adjacency_map: dict[str, set[str]] = {}
-
-        # 边编号
-        self.edge_index_map: dict[tuple[str, str], int] = {}
-        self.eid_to_edge: list[Any] = [None]  # 1-based，占位用 None
-        self.node_index_map: dict[str, int] = {}
-        self.count_to_node: dict[str, tuple[int, int]] = {}
-        self.dict_edge_to_cycles: dict[tuple[str, str], tuple[set[tuple[str, str]], set[tuple[str, str]], set[tuple[str, str]], set[tuple[str, str]]]] = defaultdict(lambda: (set(), set(), set(), set()))
-        self.dict_edgebreak_center : dict[tuple[str, str], tuple[set[str], set[tuple[str, str]]]] = defaultdict(lambda: (set(), set()))
-
-        self._build_graph()
-        self._build_edge_index()
-        self._build_node_index()
-        self.partial_C3_structure = set()
-        self.partial_C4_structure = set()
-        self.C3_structure = set()
-        self.C4_structure = set()
-        self.open_cycle_nodes = set()
-        self.E_SUMMARY = set()
-        self.F_SUMMARY = set()
-        self.G_SUMMARY = set()
-        self.H_SUMMARY = set()
-    # =====================================================
-    # 构建无向图 + 邻接表
-    # =====================================================
-    def _build_graph(self):
-        edges_int: list[tuple[int, int]] = []
-
-        for row in self.lines:
-            nums = list(map(int, row))
-            u = min(nums)
-            v = max(nums)
-            if u != v:
-                edges_int.append((u, v))
-
-        max_node = max(max(u, v) for u, v in edges_int)
-        self.pad_width = len(str(max_node))
-
-        E4: set[tuple[str, str, str, str]] = set()
-        E2: set[tuple[str, str]] = set()
-        E2_single: set[tuple[str, str]] = set()
-        for u, v in edges_int:
-            su = str(u).zfill(self.pad_width)
-            sv = str(v).zfill(self.pad_width)
-            if su > sv:
-                su, sv = sv, su
-            E4.add((su, sv, sv, su))  # 4-tuple for easier cycle node extraction
-            E2.add((su, sv))
-            E2.add((sv, su))
-            E2_single.add((su, sv))
-
-        self.undirected_edge4_set_str = E4
-        self.undirected_edge2_set_str = E2
-        self.undirected_edge2_single_str = E2_single
-
-        adj: dict[str, set[str]] = defaultdict(set)
-        for u, v in E2_single:
-            adj[u].add(v)
-            adj[v].add(u)
-
-        self.adjacency_map = dict(adj)
-
-    # =====================================================
-    # 构建 edge_index_map（无向边唯一 eid）
-    # =====================================================
-
-    def _build_edge_index(self):
-        self.edge_index_map = {}
-        self.eid_to_edge = [None]  # 1-based，占位
-
-        # undirected_edge2_single_str 中的边已经是：
-        # - 字符串
-        # - zfill 后
-        # - 且保证 u < v
-        for u, v in sorted(self.undirected_edge2_single_str):
-            eid = len(self.eid_to_edge)
-
-            # 正反两个方向都映射到同一个 eid
-            self.edge_index_map[(u, v)] = eid
-            self.edge_index_map[(v, u)] = eid
-
-            # eid_to_edge 只存一次无向边
-            self.eid_to_edge.append((u, v))
-        return self.edge_index_map, self.eid_to_edge
-
-    
-    # =====================================================
-    # 构建 node_index_map（附加信息）
-    # =====================================================
-    def _build_node_index(self):
-        self.node_index_map = {}
-        self.count_to_node = {}
-
-        nodes = set()
-        for u, v in self.undirected_edge2_single_str:
-            nodes.add(u)
-            nodes.add(v)
-
-        for node in sorted(nodes):
-            nid = len(self.node_index_map) + 1
-            self.node_index_map[node] = nid
-            deg = len(self.adjacency_map.get(node, set()))
-            self.count_to_node[node] = (nid, deg)
-
-        return nodes, self.node_index_map, self.count_to_node
-    # =====================================================
-
-    def minimal_cycle_count(self):
-        minimal = len(self.undirected_edge2_single_str) - len(self.node_index_map) + 1
-        return minimal
-
-    # induced cycle 判定（可选）
-    # =====================================================
-    def _is_induced_cycle_nodes(self, node_seq: tuple[str, ...]) -> bool:
-        nodes = set(node_seq)
-        for x in nodes:
-            deg = 0
-            for y in self.adjacency_map.get(x, set()):
-                if y in nodes:
-                    deg += 1
-                    if deg > 2:
-                        return False
-            if deg != 2:
-                return False
-        return True
-
-    def _is_induced_cycle_partical(self, node_seq: tuple[str, ...], num: int) -> bool:
-        nodes = sorted(set(node_seq))
-        node_set_target = set(nodes)
-
-        cycle_tuple = tuple(itertools.combinations(nodes, num))
-        cycle_tuple_commons = set(cycle_tuple) & self.undirected_edge2_single_str
-
-        if len(cycle_tuple_commons) != len(nodes) - (num - 1):
-            return False
-
-        # ===== 第一层：节点集合校验（你说的“set 去重用途”）=====
-        node_tuple = tuple(x for rel in cycle_tuple_commons for x in rel)
-        if set(node_tuple) != node_set_target:
-            return False
-
-        # ===== 第二层：度数形状校验 =====
-        freq = Counter(node_tuple)
-
-        if num == 2:
-            degs = sorted(freq.values())
-            return degs.count(1) == 2 and degs.count(2) == len(nodes) - 2
-
+    def insert(self, cycle_edges):
+        """
+        Tries to insert cycle. Returns True if inserted (independent), False if dependent.
+        """
+        temp = set(cycle_edges)
+        
+        while temp:
+            pivot = max(temp)
+            if pivot in self.basis:
+                temp.symmetric_difference_update(self.basis[pivot])
+            else:
+                self.basis[pivot] = temp
+                self.basis_count += 1
+                return True
         return False
 
-    def open_path_close_state_L3(self, edges_tuple):
-        """
-        通用 OPEN-k 收口判定（最多 2 层有效）
-
-        返回值：
-            1  -> 1 层可收口
-            2  -> 2 层可收口
-            0  -> ≥3 层或不可收口
-        """
-
-        # ---------- 1. 从边反推节点 ----------
-        nodes = set()
-        for u, v in edges_tuple:
-            nodes.add(u)
-            nodes.add(v)
-
-        if len(nodes) != len(edges_tuple) + 1:
-            return 0
-
-        # ---------- 2. 统计度数 ----------
-        deg = defaultdict(int)
-        for u, v in edges_tuple:
-            deg[u] += 1
-            deg[v] += 1
-
-        endpoints = [n for n in nodes if deg[n] == 1]
-        if len(endpoints) != 2:
-            return 0
-
-        a, b = endpoints
-
-        # ---------- 3. 禁止走原路径边 ----------
-        path_edge_set = set()
-        for u, v in edges_tuple:
-            path_edge_set.add((u, v))
-            path_edge_set.add((v, u))
-
-        # ---------- 4. BFS 分层（只关心 1、2 层） ----------
-        visited = {a}
-        frontier = {a}
-
-        for depth in (1, 2):   # ⚠️ 只跑 1、2 层
-            next_frontier = set()
-
-            for x in frontier:
-                for y in self.adjacency_map.get(x, []):
-                    if (x, y) in path_edge_set:
-                        continue
-
-                    if y == b:
-                        return depth   # 1 或 2，语义正好
-
-                    if y not in visited:
-                        visited.add(y)
-                        next_frontier.add(y)
-
-            if not next_frontier:
-                break
-
-            frontier = next_frontier
-
-        # ≥3 层 or 不可达
-        return 0
-
-    def extract_path_endpoints(self, edges_tuple):
-        """
-        从一条 simple path（OPEN-k）的边集合中提取两端接口 (a, b)
-
-        参数：
-            edges_tuple : tuple[(u, v), ...]
-
-        返回：
-            (a, b)  -> 两端端点（顺序不重要）
-            None    -> 不是合法 simple path
-        """
-
-        # ---------- 1. 收集节点 ----------
-        nodes = set()
-        for u, v in edges_tuple:
-            nodes.add(u)
-            nodes.add(v)
-
-        # simple path 必须满足 |V| = |E| + 1
-        if len(nodes) != len(edges_tuple) + 1:
-            return None
-
-        # ---------- 2. 统计度数 ----------
-        deg = defaultdict(int)
-        for u, v in edges_tuple:
-            deg[u] += 1
-            deg[v] += 1
-
-        # ---------- 3. 找端点 ----------
-        endpoints = [n for n in nodes if deg[n] == 1]
-
-        if len(endpoints) != 2:
-            return None
-
-        a, b = endpoints
-        return a, b
-
-    # =====================================================
-    def dfs_find_c_cycles_upto_9(self, a, b, m1, m2, edge_index, max_len=9, limit=1):
-        forbidden = {a, b, m1, m2}
-        result = []
-
-        # 最大中间路径长度 t = max_len - 4
-        max_depth = max_len - 4
-        if max_depth < 2:
-            return result
-
-        def dfs(path, visited):
-            """
-            path: 当前路径（从 m1 开始）
-            visited: 已访问节点集合
-            """
-            # 当前路径长度（不含 m1）
-            depth = len(path)
-
-            last = path[-1]
-
-            # ===== 尝试收口到 m2 =====
-            if depth >= 2 and depth <= max_depth:
-                if m2 in self.adjacency_map.get(last, ()):
-                    nodes = {a, b, m1, m2, *path}
-                    if len(nodes) != depth + 4:
-                        return
-
-                    # 无弦判定：边数 == 点数
-                    eid_list = []
-                    for u, v in itertools.combinations(nodes, 2):
-                        eid = edge_index.get((min(u, v), max(u, v)))
-                        if eid is not None:
-                            eid_list.append(eid)
-
-                    if len(eid_list) == len(nodes):
-                        result.append(frozenset(eid_list))
-                        if len(result) >= limit:
-                            raise StopIteration
-
-            # ===== 深度剪枝 =====
-            if depth >= max_depth:
-                return
-
-            # ===== 继续 DFS =====
-            for nxt in self.adjacency_map.get(last, ()):
-                if nxt in visited or nxt in forbidden:
-                    continue
-                dfs(path + [nxt], visited | {nxt})
-
-        try:
-            for x in self.adjacency_map.get(m1, ()):
-                if x in forbidden:
-                    continue
-                dfs([x], {m1, x})
-        except StopIteration:
-            pass
-
-        return result
-
-    # =====================================================
-    # 核心：统一路径生长枚举
-    def enumerate_cycles(self):
-        E2_single = self.undirected_edge2_single_str
-        E2_single_list = list(E2_single)
-        cycles_by_len: dict[int, set[frozenset[int]]] = defaultdict(set)
-        dict_edge_to_cycles = self.dict_edge_to_cycles
-        edge_index = self.edge_index_map
-        E2_single = self.undirected_edge2_single_str
-
-        edge_set = set()
-        E_SUMMARY = self.E_SUMMARY
-        F_SUMMARY = self.F_SUMMARY
-        G_SUMMARY = self.G_SUMMARY
-        H_SUMMARY = self.H_SUMMARY
-        dict_edge_to_cycles = self.dict_edge_to_cycles
-        for i in range(0, len(E2_single_list)):
-            edge = E2_single_list[i]
-            edge_set = set(edge)
-            edge_start, edge_end = edge[0], edge[-1]
-            edge = (min(edge_start, edge_end), max(edge_start, edge_end))
-
-            # set()不能动
-            nodes_start_connections = self.adjacency_map.get(edge_start, set()) - edge_set
-            nodes_end_connections = self.adjacency_map.get(edge_end, set()) - edge_set
-            nodes_connected_all = (nodes_start_connections | nodes_end_connections) - edge_set
-
-            # 用于C3，边的另一端直接相连某一点
-            nodes_connected_common = nodes_start_connections & nodes_end_connections
-            # set()要转成tuple并排序，才能做后续组合
-            nodes_start_only = nodes_start_connections - nodes_connected_common
-            nodes_end_only = nodes_end_connections - nodes_connected_common
-            nodes_connected_unique = nodes_start_only | nodes_end_only
-
-            # 全集合
-            A = set(itertools.combinations(sorted(nodes_connected_all), 2)) - E2_single
-            # start only 集合
-            B = set(itertools.combinations(sorted(nodes_start_only), 2))
-            # end only 集合
-            C = set(itertools.combinations(sorted(nodes_end_only), 2))
-            # unique 集合，至少和一点相连
-            D = set(itertools.combinations(sorted(nodes_connected_unique), 2))
-            # 与点两侧都相连的点对集合
-            E = (B | C) & E2_single
-            # 存储 C3中间结构
-            F = ((B | C) - E) - E2_single                
-            # 与边两端都相连的点对集合，去除直连其中一点的集合
-            G = ((D - B - C) & E2_single)
-            # 存储 C4中间结构
-            H = ((A - B - C) - G)
-            for node_pair in H:
-                node1, node2 = node_pair
-                node1_connections = self.adjacency_map.get(node1, set())
-                node2_connections = self.adjacency_map.get(node2, set())
-                node_common_connections = node1_connections & node2_connections - edge_set
-                if len(node_common_connections) > 0:
-                    for mid_node in node_common_connections:
-                        nodes_in_cycle = sorted((edge_start, node1, mid_node, node2, edge_end))
-                        eid_list = []
-                        eids = itertools.combinations(nodes_in_cycle, 2)
-                        for u, v in eids:
-                            eid = edge_index.get((min(u, v), max(u, v)), None)
-                            if eid is not None:
-                                eid_list.append(eid)
-                        if len(eid_list) != len(nodes_in_cycle):
-                            continue
-                        eids_in_cycle = tuple(sorted(eid_list))
-                        cycles_by_len[len(eids_in_cycle)].add(frozenset(eids_in_cycle))
-            dict_edge_to_cycles[edge] = (E, F, G, H)
-            E_SUMMARY |= E
-            F_SUMMARY |= F
-            G_SUMMARY |= G
-            H_SUMMARY |= H
-            E = set()
-            F = set()
-            G = set()
-            H = set()
-
-        for node_pair in E2_single:
-            u, v = node_pair
-            node_pair_set = set(node_pair)
-            edge_start, edge_end = node_pair[0], node_pair[-1]
-            edge_point = (min(edge_start, edge_end), max(edge_start, edge_end))
-            edge_start = edge_point[0]
-            edge_end = edge_point[-1]
-            E, F, G, H = dict_edge_to_cycles[edge_point]
-            # set()不能动
-            nodes_start_connections = self.adjacency_map.get(edge_start, set()) - node_pair_set
-            nodes_end_connections = self.adjacency_map.get(edge_end, set()) - node_pair_set
-            nodes_connected_all = (nodes_start_connections | nodes_end_connections) - node_pair_set
-
-            # 用于C3，边的另一端直接相连某一点
-            nodes_connected_common = nodes_start_connections & nodes_end_connections
-            # set()要转成tuple并排序，才能做后续组合
-            nodes_start_only = nodes_start_connections - nodes_connected_common
-            nodes_end_only = nodes_end_connections - nodes_connected_common
-            nodes_connected_unique = nodes_start_only | nodes_end_only
-
-            for mid_node in nodes_connected_common:
-                nodes_in_cycle = sorted((edge_start, mid_node, edge_end))
-                eid_list = []
-                eids = itertools.combinations(nodes_in_cycle, 2)
-                for u, v in eids:
-                    eid = edge_index.get((min(u, v), max(u, v)), None)
-                    if eid is not None:
-                        eid_list.append(eid)
-                if len(eid_list) != len(nodes_in_cycle):
-                    continue
-                eids_in_cycle = tuple(sorted(eid_list))
-                cycles_by_len[len(eids_in_cycle)].add(frozenset(eids_in_cycle))
-
-            # C4
-            if len(G) >= 3:
-                continue
-            # set()不能动
-            for node_pair in G:
-                u, v = node_pair
-                nodes_in_cycle = sorted((edge_start, u, v, edge_end))
-                eid_list = []
-                eids = itertools.combinations(nodes_in_cycle, 2)
-                for x, y in eids:
-                    eid = edge_index.get((min(x, y), max(x, y)), None)
-                    if eid is not None:
-                        eid_list.append(eid)
-                if len(eid_list) != len(nodes_in_cycle):
-                    continue
-                eids_in_cycle = tuple(sorted(eid_list))
-                cycles_by_len[len(eids_in_cycle)].add(frozenset(eids_in_cycle))
-        self.E_SUMMARY = E_SUMMARY
-        self.F_SUMMARY = F_SUMMARY
-        self.G_SUMMARY = G_SUMMARY
-        self.H_SUMMARY = H_SUMMARY
-
-        cycles_count = 0
-        for k in cycles_by_len.keys():
-            cycles_count += len(cycles_by_len[k])
-
-        for node_pair in F_SUMMARY & H_SUMMARY:
-            u, v = node_pair
-            node_pair_set = set(node_pair)
-            edge_start, edge_end = node_pair[0], node_pair[-1]
-            edge_point = (min(edge_start, edge_end), max(edge_start, edge_end))
-            edge_start = edge_point[0]
-            edge_end = edge_point[-1]
-            nodes_start_connections = self.adjacency_map.get(edge_start, set()) - node_pair_set
-            nodes_end_connections = self.adjacency_map.get(edge_end, set()) - node_pair_set
-            nodes_connected_all = (nodes_start_connections | nodes_end_connections) - node_pair_set
-            nodes_connected_common = nodes_start_connections & nodes_end_connections
-            # set()要转成tuple并排序，才能做后续组合
-            if len(nodes_connected_common) == 0:
-                continue
-            nodes_start_only = nodes_start_connections - nodes_connected_common
-            nodes_end_only = nodes_end_connections - nodes_connected_common
-            nodes_connected_unique = nodes_start_only | nodes_end_only
-            D = set(itertools.combinations(sorted(nodes_connected_unique), 2))
-            # 与点两侧都相连的点对集合
-            i_set = D & E2_single
-            if len(i_set) == 1:
-                for mid_node in nodes_connected_common:
-                    for node_pair_2 in i_set:
-                        node1, node2 = node_pair_2
-                        nodes_in_cycle = sorted((edge_start, node1, mid_node, node2, edge_end))
-                        eid_list = []
-                        eids = itertools.combinations(nodes_in_cycle, 2)
-                        for x, y in eids:
-                            eid = edge_index.get((min(x, y), max(x, y)), None)
-                            if eid is not None:
-                                eid_list.append(eid)
-                        if len(eid_list) != len(nodes_in_cycle):
-                            continue
-                        eids_in_cycle = tuple(sorted(eid_list))
-                        cycles_by_len[len(eids_in_cycle)].add(frozenset(eids_in_cycle))
-        # 1) 去重（其实 set 本来就去重了，这段可省略）
-        for k, v in list(cycles_by_len.items()):
-            cycles_by_len[k] = set(v)
-        common_set = F_SUMMARY & H_SUMMARY
-
-        # 2) 统计“已被环覆盖的边对”
-        used_edge_pairs = set()
-        for k, v in cycles_by_len.items():
-            for cycle_eids in v:
-                for eid in cycle_eids:
-                    u, w = self.eid_to_edge[eid]  # 注意：这里存的是 (u,v) 且 u<v
-                    used_edge_pairs.add((u, w))   # 用无向规范化边对
-
-        # 3) 剩余“未覆盖”的边对
-        E2_single_rest_set = E2_single - used_edge_pairs
-
-        # ---------- C6 DFS 补环 ----------
-        for (a, b) in E2_single_rest_set:
-            a, b = min(a, b), max(a, b)
-
-            # dict_edge_to_cycles 里已经缓存过
-            E, F, G, H = dict_edge_to_cycles[(a, b)]
-
-            # 只从 C4 中间结构 (m1, m2) 出发
-            for (m1, m2) in H & common_set:
-
-                # 调用 DFS（最多找 1 个）
-                c6_list = self.dfs_find_c_cycles_upto_9(
-                    a, b,
-                    m1, m2,
-                    edge_index,
-                    limit=1
-                )
-
-                if not c6_list:
-                    continue
-                cycle = c6_list[0]
-                cycles_by_len[len(cycle)].add(cycle)
-
-                break
-
-
-        return cycles_by_len
-
+def bfs_with_detours(u, v, adj, edge_to_id, visited_limit=200, detours=5, max_path_len=None):
+    """
+    Returns a list of candidate cycles (each is a set of edge IDs).
+    """
+    candidates = []
     
-    # =====================================================
-    # 由结构对（原 F/H）生成候选环（按长度分桶）
-    # =====================================================
-    def build_struct_cycles_by_len(self, max_len: int = 5):
-        """
-        从结构信息生成候选环字典（只生成短环）
-        返回: dict[int, set[frozenset[int]]]
-        """
-        struct_cycles_by_len = defaultdict(set)
-        edge_index = self.edge_index_map
+    # Base Edge ID
+    base_eid = edge_to_id.get((min(u, v), max(u, v)))
+    if base_eid is None: return []
 
-        # ===== 结构 C3（原 F_SUMMARY）=====
-        if max_len >= 3:
-            for (u, v) in self.F_SUMMARY:
-                # 找公共邻点
-                common = self.adjacency_map[u] & self.adjacency_map[v]
-                for x in common:
-                    e1 = edge_index.get((u, x))
-                    e2 = edge_index.get((v, x))
-                    e3 = edge_index.get((u, v))
-                    if e1 and e2 and e3:
-                        struct_cycles_by_len[3].add(
-                            frozenset((e1, e2, e3))
-                        )
-
-        # ===== 结构 C4 / C5（暂不展开，留接口位）=====
-        # if max_len >= 4:
-        #     ...
-
-        return struct_cycles_by_len
-
-    # =====================================================
-    # 管线入口
-    # =====================================================
-    def run_pipeline(self, max_len: int = 12, induced_only: bool = False):
-        cycles_by_len = self.enumerate_cycles()
-
-        if induced_only:
-            # 仅保留无弦环
-            induced_cycles_by_len: dict[int, set[frozenset[int]]] = defaultdict(set)
-
-            for k in cycles_by_len.keys():
-                for cycle_eids in cycles_by_len[k]:
-                    # 必须用 set，避免节点重复
-                    nodes_in_cycle = set()
-                    for eid in cycle_eids:
-                        u, v = self.eid_to_edge[eid]
-                        nodes_in_cycle.add(u)
-                        nodes_in_cycle.add(v)
-
-                    if self._is_induced_cycle_nodes(tuple(nodes_in_cycle)):
-                        induced_cycles_by_len[k].add(cycle_eids)
-
-            cycles_by_len = induced_cycles_by_len
-
-        # 截断到 max_len
-        cycles_by_len = {k: v for k, v in cycles_by_len.items() if k <= max_len}
-
-        return cycles_by_len
-
-
-class CycleBasisBuilder:
-    """
-    Build a cycle basis of an undirected graph using:
-    - BFS spanning tree
-    - Fundamental cycles
-    - GF(2) Gaussian elimination (bitmask version)
-
-    Key invariants:
-    - basis_reduced : int bitmask (for independence check only)
-    - basis_out     : frozenset[int] (original simple cycles)
-    """
-
-    # =====================================================
-    # Init
-    # =====================================================
-    def __init__(self, adjacency_map, edge_index_map, eid_to_edge):
-        self.adj = adjacency_map
-        self.edge_index_map = edge_index_map
-        self.eid_to_edge = eid_to_edge
-
-        self.parent = {}
-        self.parent_eid = {}
-        self.depth = {}
-        self.tree_edge_eids = set()
-
-    # =====================================================
-    # 1. Build spanning tree / forest (BFS)
-    # =====================================================
-    def build_spanning_tree(self):
-        visited = set()
-
-        def get_eid(u, v):
-            return self.edge_index_map.get((u, v)) or \
-                   self.edge_index_map.get((v, u))
-
-        for root in self.adj:
-            if root in visited:
-                continue
-
-            visited.add(root)
-            self.parent[root] = None
-            self.parent_eid[root] = None
-            self.depth[root] = 0
-
-            q = deque([root])
-            while q:
-                x = q.popleft()
-                for y in self.adj.get(x, ()):
-                    if y not in visited:
-                        visited.add(y)
-                        self.parent[y] = x
-                        eid = get_eid(x, y)
-                        self.parent_eid[y] = eid
-                        self.depth[y] = self.depth[x] + 1
-                        if eid is not None:
-                            self.tree_edge_eids.add(eid)
-                        q.append(y)
-
-    # =====================================================
-    # 2. Tree path (u -> v): bitmask
-    # =====================================================
-    def tree_path_mask(self, u, v):
-        mask = 0
-        uu, vv = u, v
-
-        while self.depth[uu] > self.depth[vv]:
-            eid = self.parent_eid[uu]
-            if eid is not None:
-                mask ^= (1 << eid)
-            uu = self.parent[uu]
-
-        while self.depth[vv] > self.depth[uu]:
-            eid = self.parent_eid[vv]
-            if eid is not None:
-                mask ^= (1 << eid)
-            vv = self.parent[vv]
-
-        while uu != vv:
-            eid1 = self.parent_eid[uu]
-            eid2 = self.parent_eid[vv]
-            if eid1 is not None:
-                mask ^= (1 << eid1)
-            if eid2 is not None:
-                mask ^= (1 << eid2)
-            uu = self.parent[uu]
-            vv = self.parent[vv]
-
-        return mask
-
-    # =====================================================
-    # 2.5 Tree path length only (heuristic)
-    # =====================================================
-    def tree_path_len(self, u, v):
-        uu, vv = u, v
-        du, dv = self.depth[uu], self.depth[vv]
-        length = 0
-
-        while du > dv:
-            uu = self.parent[uu]
-            du -= 1
-            length += 1
-
-        while dv > du:
-            vv = self.parent[vv]
-            dv -= 1
-            length += 1
-
-        while uu != vv:
-            uu = self.parent[uu]
-            vv = self.parent[vv]
-            length += 2
-
-        return length
-
-    # =====================================================
-    # 3. Complete cycle basis (bitmask GF(2))
-    # =====================================================
-    def complete_cycle_basis(self, basis_cycles, target_rank):
-        """
-        Parameters
-        ----------
-        basis_cycles : list[frozenset[int]]
-        target_rank  : int
-
-        Returns
-        -------
-        basis_out : list[frozenset[int]]
-        added_cnt : int
-        """
-
-        # pivot_bit -> mask
-        basis = {}
-        basis_out = []
-        basis_set = set()
-
-        def reduce_mask(m):
-            while m:
-                pivot = m & -m
-                b = basis.get(pivot)
-                if b is None:
+    # 1. Primary Shortest Path (Standard BFS)
+    # parent: node -> (pred_node, edge_id_from_pred)
+    parent = {u: (None, None)}
+    dist = {u: 0}
+    queue = deque([u])
+    found = False
+    nodes_visited = 0
+    
+    visited_set = {u}
+    
+    primary_path_len = 0
+    
+    while queue:
+        curr = queue.popleft()
+        nodes_visited += 1
+        if nodes_visited > visited_limit:
+            break
+            
+        if curr == v:
+            found = True
+            primary_path_len = dist[curr]
+            break
+        
+        # Depth limit check
+        if max_path_len is not None and dist[curr] >= max_path_len:
+            continue
+            
+        for nb in adj[curr]:
+            # Mask the direct edge (u, v)
+            if curr == u and nb == v: continue
+            if curr == v and nb == u: continue
+            
+            if nb not in visited_set:
+                visited_set.add(nb)
+                eid = edge_to_id.get((min(curr, nb), max(curr, nb)))
+                parent[nb] = (curr, eid)
+                dist[nb] = dist[curr] + 1
+                queue.append(nb)
+                
+    primary_path_eids = []
+    if found:
+        # Reconstruct
+        curr = v
+        while curr != u:
+            pred_info = parent[curr]
+            if pred_info is None: break # Should not happen
+            pred, eid = pred_info
+            primary_path_eids.append(eid)
+            curr = pred
+        
+        cycle = frozenset(primary_path_eids + [base_eid])
+        candidates.append(cycle)
+        
+    # 2. Detour Logic (If Primary found)
+    # To improve rank, we force the path to diverge.
+    if found and detours > 0 and len(primary_path_eids) > 1:
+        # Sample edges to block
+        edges_to_try = primary_path_eids[:]
+        if len(edges_to_try) > detours:
+            edges_to_try = random.sample(edges_to_try, detours)
+            
+        for blocked_eid in edges_to_try:
+            # Run BFS again with blocked_eid
+            p_visited = {u}
+            p_parent = {u: (None, None)}
+            p_dist = {u: 0}
+            p_queue = deque([u])
+            p_found = False
+            p_cnt = 0
+            
+            # Slightly higher limit for detours?
+            detour_limit = visited_limit + 100
+            
+            while p_queue:
+                curr = p_queue.popleft()
+                p_cnt += 1
+                if p_cnt > detour_limit:
                     break
-                m ^= b
-            return m
-
-        # ---------- Step 1: existing cycles ----------
-        for cyc in basis_cycles:
-            if cyc in basis_set:
-                continue
-
-            m = 0
-            for eid in cyc:
-                m ^= (1 << eid)
-
-            r = reduce_mask(m)
-            if r:
-                pivot = r & -r
-                basis[pivot] = r
-                basis_out.append(cyc)
-                basis_set.add(cyc)
-
-            if len(basis_out) >= target_rank:
-                return basis_out[:target_rank], 0
-
-        # ---------- Step 2: fundamental cycles ----------
-        all_eids = set(self.edge_index_map.values())
-        non_tree_edges = list(all_eids - self.tree_edge_eids)
-
-        non_tree_edges.sort(
-            key=lambda eid: self.tree_path_len(*self.eid_to_edge[eid])
-        )
-
-        added = 0
-        for eid in non_tree_edges:
-            if len(basis_out) >= target_rank:
-                break
-
-            u, v = self.eid_to_edge[eid]
-            path_mask = self.tree_path_mask(u, v)
-            fund_mask = path_mask ^ (1 << eid)
-
-            r = reduce_mask(fund_mask)
-            if not r:
-                continue
-
-            pivot = r & -r
-            basis[pivot] = r
-
-            # 还原为 frozenset[int]
-            eids = set()
-            tmp = fund_mask
-            while tmp:
-                lsb = tmp & -tmp
-                eids.add(lsb.bit_length() - 1)
-                tmp ^= lsb
-
-            cyc = frozenset(eids)
-            if cyc in basis_set:
-                continue
-
-            basis_out.append(cyc)
-            basis_set.add(cyc)
-            added += 1
-
-        return basis_out[:target_rank], added
+                    
+                if curr == v:
+                    p_found = True
+                    break
+                
+                if max_path_len is not None and p_dist[curr] >= max_path_len:
+                    continue
+                
+                for nb in adj[curr]:
+                    if curr == u and nb == v: continue
+                    
+                    eid = edge_to_id.get((min(curr, nb), max(curr, nb)))
+                    if eid == blocked_eid: continue # BLOCKED
+                    
+                    if nb not in p_visited:
+                        p_visited.add(nb)
+                        p_parent[nb] = (curr, eid)
+                        p_dist[nb] = p_dist[curr] + 1
+                        p_queue.append(nb)
+            
+            if p_found:
+                d_eids = []
+                curr = v
+                while curr != u:
+                    pkg = p_parent[curr]
+                    if pkg is None: break
+                    pred, eid = pkg
+                    d_eids.append(eid)
+                    curr = pred
+                
+                d_cycle = frozenset(d_eids + [base_eid])
+                candidates.append(d_cycle)
 
 
-def main(input_file, output_file):
-    import time
-    import re
-    debug_mode = False
-    start_time = time.time()
-    print("\n ")
-    print("========================================= ")
-    print(f"Processing input file: {input_file}")
-    # =====================================================
-    # 1. 读取与预处理输入
-    # =====================================================
-    with open(input_file, 'r') as f:
-        raw_lines = [line.strip() for line in f if line.strip()]
+    return candidates
 
-    lines = [re.split(r'[,\s]+', line) for line in raw_lines]
-    lines = [list(filter(None, line)) for line in lines]
+def get_fundamental_cycles(adj, edges, num_nodes):
+    """
+    Generates fundamental cycles from a BFS spanning tree.
+    Ensures that we have enough candidates to cover the full rank.
+    """
+    # 1. Build Spanning Forest
+    # handle disconnected components
+    visited = set()
+    parent = {} # child -> parent
+    depth = {}
+    
+    # Store candidates
+    candidates = []
+    
+    # Edge set for fast lookup? Not needed if we iterate 'edges' list.
+    # But we need to know which are tree edges.
+    tree_edges = set()
+    
+    all_nodes = sorted(list(adj.keys()))
+    
+    for root in all_nodes:
+        if root in visited: continue
+        
+        # BFS from root
+        q = deque([root])
+        visited.add(root)
+        parent[root] = None
+        depth[root] = 0
+        
+        while q:
+            u = q.popleft()
+            for v in adj[u]:
+                if v not in visited:
+                    visited.add(v)
+                    parent[v] = u
+                    depth[v] = depth[u] + 1
+                    q.append(v)
+                    tree_edges.add(tuple(sorted((u, v))))
+    
+    # 2. Iterate all edges. If not int tree, it's a back-edge -> Fundamental Cycle.
+    # We need edge_to_id mapping to return edge IDs.
+    
+    # We can pass edge_to_id or assume caller handles lookup if we return node paths?
+    # Better to return edge IDs directly.
+    return [] # Placeholder, implemented inside main or helper with full context
+    
+def get_fundamental_cycles_eids(adj, edge_to_id, num_nodes):
+    candidates = []
+    visited = set()
+    parent = {} 
+    depth = {}
+    
+    nodes = sorted(list(adj.keys()))
+    
+    # Build Tree
+    for root in nodes:
+        if root in visited: continue
+        q = deque([root])
+        visited.add(root)
+        parent[root] = None
+        depth[root] = 0
+        
+        while q:
+            u = q.popleft()
+            for v in adj[u]:
+                if v not in visited:
+                    visited.add(v)
+                    parent[v] = u
+                    depth[v] = depth[u] + 1
+                    q.append(v)
 
-    # =====================================================
-    # 2. 构建图处理器
-    # =====================================================
-    processor = InputDataProcessor(lines)
+    # Find Back Edges
+    # Iterate all unique edges
+    for (pair, eid) in edge_to_id.items():
+        u, v = pair
+        # Check if tree edge: parent[u] == v or parent[v] == u
+        is_tree = False
+        if u in parent and parent[u] == v: is_tree = True
+        if v in parent and parent[v] == u: is_tree = True
+        
+        if not is_tree:
+            # Back Edge. Form Cycle.
+            # LCA approach or just trace up.
+            # Cycle = Edge(u,v) + Path(u...LCA...v)
+            
+            p1 = []
+            c1 = u
+            while c1 is not None:
+                p1.append(c1)
+                c1 = parent.get(c1)
+                
+            p2 = []
+            c2 = v
+            while c2 is not None:
+                p2.append(c2)
+                c2 = parent.get(c2)
+            
+            # Truncate to LCA
+            # Reverse to have root at start?
+            # p1: [u, p(u), ... root]
+            # p2: [v, p(v), ... root]
+            
+            # Find LCA
+            lca = None
+            # Set lookup
+            p1_set = set(p1)
+            for x in p2:
+                if x in p1_set:
+                    lca = x
+                    break
+            
+            if lca is None: continue # Disconnected? Should not happen if in component.
+            
+            # Construct cycle eids
+            cyc_eids = [eid]
+            
+            # Trace u up to lca
+            curr = u
+            while curr != lca:
+                par = parent[curr]
+                if par is None: break
+                e = edge_to_id.get(tuple(sorted((curr, par))))
+                if e is not None: cyc_eids.append(e)
+                curr = par
+                
+            # Trace v up to lca
+            curr = v
+            while curr != lca:
+                par = parent[curr]
+                if par is None: break
+                e = edge_to_id.get(tuple(sorted((curr, par))))
+                if e is not None: cyc_eids.append(e)
+                curr = par
+                
+            candidates.append(frozenset(cyc_eids))
+            
+    return candidates
 
-    MAX_EDGES = 1000000
-    edge_cnt = len(processor.undirected_edge2_single_str)
-    if edge_cnt > MAX_EDGES:
-        raise RuntimeError(
-            f"Abort: edge count {edge_cnt} exceeds limit {MAX_EDGES}"
-        )
+def find_squares(adj, edge_to_id):
+    """
+    Finds all simple squares (4-cycles). 
+    """
+    squares = []
+    covered_edges = set()
+    adj_sets = {u: set(nbs) for u, nbs in adj.items()}
+    sorted_nodes = sorted(list(adj.keys()))
+    
+    for u in sorted_nodes:
+        # u is min node index to avoid rotation duplicates
+        u_nbs = adj_sets[u]
+        valid_v = [n for n in u_nbs if n > u]
+        
+        for v in valid_v:
+            v_nbs = adj_sets[v]
+            for w in v_nbs:
+                if w <= u: continue
+                if w == v: continue
+                
+                # Check intersection of N(u) and N(w)
+                # We need x in N(u) and N(w).
+                # To avoid u-v-w-x vs u-x-w-v, enforce x > v
+                
+                w_nbs = adj_sets[w]
+                common = u_nbs.intersection(w_nbs)
+                
+                for x in common:
+                    if x > v:
+                        # Found square u-v-w-x-u
+                        e1 = edge_to_id.get((min(u, v), max(u, v)))
+                        e2 = edge_to_id.get((min(v, w), max(v, w)))
+                        e3 = edge_to_id.get((min(w, x), max(w, x)))
+                        e4 = edge_to_id.get((min(x, u), max(x, u)))
+                        
+                        if e1 is not None and e2 is not None and e3 is not None and e4 is not None:
+                            sq = frozenset([e1, e2, e3, e4])
+                            squares.append(sq)
+                            covered_edges.update([e1, e2, e3, e4])
+    return squares, covered_edges
 
-    beta = processor.minimal_cycle_count()
+def find_triangles(adj, edge_to_id):
+    """
+    Finds all triangles efficiently using set intersections.
+    Returns:
+        triangles: list of frozenset(eids)
+        covered_edges: set of edge indices that are part of at least one triangle
+    """
+    triangles = []
+    covered_edges = set()
+    
+    # Pre-convert to sets for intersection
+    adj_sets = {u: set(nbs) for u, nbs in adj.items()}
+    
+    # Iterate all edges to find triangles
+    # To avoid duplication, we enforce u < v < w order or iterate edges
+    # Iterating edges (u, v) with u < v is cleaner.
+    
+    # edge_to_id keys are (min, max)
+    sorted_edges = sorted(edge_to_id.keys())
+    
+    for (u, v) in sorted_edges:
+        # Common neighbors
+        common = adj_sets[u].intersection(adj_sets[v])
+        
+        for w in common:
+            # Found triangle u-v-w
+            # We only record it if u < v < w to ensure uniqueness
+            # Since we iterate edges (u,v) where u < v:
+            # Case 1: w > v. Then u < v < w. This is the unique canonical check.
+            # Case 2: w < u. Then w < u < v. We would have seen it when processing (w, u).
+            # Case 3: u < w < v. We would have seen it when processing (u, w).
+            
+            if w > v:
+                eid1 = edge_to_id.get((u, v))
+                eid2 = edge_to_id.get((min(v, w), max(v, w)))
+                eid3 = edge_to_id.get((min(u, w), max(u, w)))
+                
+                if eid1 is not None and eid2 is not None and eid3 is not None:
+                    triangles.append(frozenset([eid1, eid2, eid3]))
+                    covered_edges.add(eid1)
+                    covered_edges.add(eid2)
+                    covered_edges.add(eid3)
+                    
+    return triangles, covered_edges
 
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: python solution.py input.txt output.txt")
+        return
 
-    # =====================================================
-    # 3. 图信息统计（保留打印）
-    # =====================================================
-    # print(" ")
-    # print("\n\n========= 图信息统计 =========")
-    # print("输入文件 =", input_file)
-    # print("输入边数 =", len(processor.undirected_edge2_single_str))
-    # print("输入节点数 =", len(processor.node_index_map))
-    # print("题目要求的最小环数 =", beta)
+    input_file = sys.argv[1]
+    output_file = sys.argv[2]
+    
+    t0 = time.time()
+    
+    # 1. Load Data
+    raw_edges = DataHelper.read_edges(input_file)
+    
+    # Node Mapping
+    nodes = set()
+    for u, v in raw_edges:
+        nodes.add(u)
+        nodes.add(v)
+    sorted_nodes = sorted(list(nodes))
+    node_map = {n: i for i, n in enumerate(sorted_nodes)}
+    inv_node_map = {i: n for i, n in enumerate(sorted_nodes)}
+    
+    edges = []
+    adj = defaultdict(list)
+    edge_to_id = {}
+    id_to_edge = {}
+    
+    for idx, (u, v) in enumerate(raw_edges):
+        ui, vi = node_map[u], node_map[v]
+        edges.append((ui, vi))
+        adj[ui].append(vi)
+        adj[vi].append(ui)
+        edge_to_id[(ui, vi)] = idx
+        id_to_edge[idx] = (ui, vi)
 
-    # =====================================================
-    # 4. 枚举候选环（一次可闭合）
-    # =====================================================
-    cycles_by_len = processor.run_pipeline(
-        max_len=8,
-        induced_only=True
-    )
+    num_nodes = len(nodes)
+    num_edges = len(edges)
+    target_rank = num_edges - num_nodes + 1
+    
+    print(f"Nodes: {num_nodes}, Edges: {num_edges}, Est. Target Rank: {target_rank}")
+    
+    # 3. Generate Candidates
+    all_candidates = []
+    
+    # 3a. Fast Triangle Extraction
+    print("Extracting Triangles...")
+    triangles, covered_triangle_edges = find_triangles(adj, edge_to_id)
+    print(f"Found {len(triangles)} triangles. Covered {len(covered_triangle_edges)} edges.")
+    all_candidates.extend(triangles)
 
-    # =====================================================
-    # 结构环（来自结构信息）
-    # =====================================================
-    struct_cycles_by_len = processor.build_struct_cycles_by_len(max_len=5)
-    if debug_mode:
-        print("struct cycles:", {k: len(v) for k, v in struct_cycles_by_len.items()})
+    print("Extracting Squares...")
+    squares, covered_square_edges = find_squares(adj, edge_to_id)
+    print(f"Found {len(squares)} squares. Covered {len(covered_square_edges)} edges.")
+    all_candidates.extend(squares)
 
-    # 合并到候选环集合
-    for k, v in struct_cycles_by_len.items():
-        cycles_by_len[k] |= v
+    covered_edges = covered_triangle_edges.union(covered_square_edges)
+    
+    processed = 0
+    t_scan = time.time()
+    
+    # Process edges
+    # Staged coverage: C5 then C6 for uncovered
+    
+    # Stage 3: Scan for 5-cycles (Path len 4)
+    print("Scanning for 5-cycles (len 5)...")
+    scanned_5 = 0
+    skipped_5 = 0
+    
+    for (u, v) in edges:
+        eid_uv = edge_to_id.get((u, v))
+        if eid_uv in covered_edges:
+            skipped_5 += 1
+            continue
+            
+        # BFS with limit 4 (Cycle len 5)
+        # Moderate visited limit
+        cycles = bfs_with_detours(u, v, adj, edge_to_id, visited_limit=150, detours=2, max_path_len=4)
+        
+        found_5 = False
+        if cycles:
+            for c in cycles:
+                if len(c) <= 5:
+                     all_candidates.append(c)
+                     found_5 = True
+                     # Greedily cover this edge and potentially others
+                     covered_edges.update(c) 
+                     
+        if found_5:
+            scanned_5 += 1
+            
+    print(f"  > Found {scanned_5} edges yielding 5-cycles. Skipped {skipped_5} pre-covered.")
 
-    if debug_mode:
-        print("DEBUG F_SUMMARY:", len(processor.F_SUMMARY))
-        print("DEBUG H_SUMMARY:", len(processor.H_SUMMARY))
-        print("DEBUG F ∩ H:", len(processor.F_SUMMARY & processor.H_SUMMARY))
+    # Stage 4: Scan for 6-cycles (Path len 5) or longer for remaining uncovered
+    print("Scanning for 6-cycles (len 6) or fallback...")
+    scanned_6 = 0
+    skipped_6 = 0
+    
+    for (u, v) in edges:
+        eid_uv = edge_to_id.get((u, v))
+        if eid_uv in covered_edges:
+            skipped_6 += 1
+            continue
+            
+        # BFS with limit 5 (Cycle len 6) or slightly more
+        # Increased visited limit for deeper search
+        cycles = bfs_with_detours(u, v, adj, edge_to_id, visited_limit=300, detours=2, max_path_len=6)
+        
+        if cycles:
+            all_candidates.extend(cycles)
+            scanned_6 += 1
+            # We don't strictly need to update covered_edges here as this is the last BFS stage,
+            # but for consistency if we added more stages:
+            for c in cycles:
+                covered_edges.update(c)
 
+    scan_dur = time.time() - t_scan
+    print(f"Scan finished in {scan_dur:.2f}s. Scanned C5: {scanned_5}, Scanned C6+: {scanned_6}. Total Candidates: {len(all_candidates)}")
+    
+    # 3b. Add Fundamental Cycles (Ensures Full Rank)
+    print("Generating Fundamental Cycles...")
+    fund_cycles = get_fundamental_cycles_eids(adj, edge_to_id, num_nodes)
+    print(f"Fundamental Cycles: {len(fund_cycles)}")
+    all_candidates.extend(fund_cycles)
+    
+    # 4. Sort Candidates
+    # Primary Key: Length
+    print("Sorting candidates...")
+    unique_candidates = list(set(all_candidates))
+    unique_candidates.sort(key=lambda x: len(x))
+    
+    print(f"Unique Candidates: {len(unique_candidates)}")
+    
+    # 5. Build Basis
+    basis_obj = LinearBasis(num_edges)
+    final_cycles = []
+    
+    total_weight = 0
+    for cyc in unique_candidates:
+        if basis_obj.insert(cyc):
+            final_cycles.append(cyc)
+            total_weight += len(cyc)
+            # If we reach target rank, we can stop?
+            # if len(final_cycles) >= target_rank: break 
+            # Ideally yes, but checking connectedness is safer.
+                
+    print(f"Basis Rank: {len(final_cycles)}, Weight: {total_weight}")
+    
+    # Calculate stats breakdown
+    len_counts = defaultdict(int)
+    for c in final_cycles:
+        len_counts[len(c)] += 1
+        
+    print("Basis Cycle Length Breakdown:")
+    for length in sorted(len_counts.keys()):
+        count = len_counts[length]
+        print(f"  Length {length}: {count} cycles (Subtotal: {length * count})")
 
-    # =====================================================
-    # 5. 打印各长度环数量（保留）
-    # =====================================================
-    for k in sorted(cycles_by_len.keys()):
-        if debug_mode:
-            print(f"最小环基类型数量  C{k}: {len(cycles_by_len[k])} cycles")
-        pass
-
-    # =====================================================
-    # 6. 提取线性无关环基（GF(2)）
-    # =====================================================
-    independent_basis = extract_independent_cycle_basis_bitmask(cycles_by_len, target_rank=beta)
-
-    # print(f"线性无关环基秩（补前）: {len(independent_basis)}")
-
-    # =====================================================
-    # >>> PATCH：补环逻辑
-    # =====================================================
-    if len(independent_basis) < beta:
-        builder = CycleBasisBuilder(
-            processor.adjacency_map,
-            processor.edge_index_map,
-            processor.eid_to_edge
-        )
-        builder.build_spanning_tree()
-
-        independent_basis, added_cnt = builder.complete_cycle_basis(
-            independent_basis,
-            beta
-        )
-
-        print(f"补充的基础环数量: {added_cnt}")
-        print(f"线性无关环基秩（补后）: {len(independent_basis)}")
-
-    # =====================================================
-    # >>> ASSERT：环基秩必须等于 beta（就在这里）
-    # =====================================================
-    assert len(independent_basis) == beta, \
-        f"cycle basis rank mismatch: {len(independent_basis)} != {beta}"
-
-
-    # =====================================================
-    # 8. 环的节点顺序还原
-    # =====================================================
-    result_cycles = []
-    for cycle_eids in independent_basis:
-        node_seq = reconstruct_cycle_order_from_eids(list(cycle_eids), processor.eid_to_edge)
-        if node_seq is not None:
-            result_cycles.append(node_seq)
-    if debug_mode:
-        print("打印的环数(秩/目标):", len(independent_basis), "输出环数:", len(result_cycles))
-    result_cycles.sort(key=lambda x: (len(x), x))
-
-    # =====================================================
-    # 9. 输出结果
-    # =====================================================
-    cycle_count = len(result_cycles)
-    node_count = 0
+    # 6. Output
     with open(output_file, 'w') as f:
-        f.write(f"{len(result_cycles)}\n")
-        for cycle_nodes in result_cycles:
-            nodes_clean = [str(int(x)) for x in cycle_nodes]
-            node_count += len(nodes_clean) - 1
-            f.write(f"{len(nodes_clean)} {' '.join(nodes_clean)}\n")
+        f.write(f"{len(final_cycles)}\n")
+        
+        for cyc_eids in final_cycles:
+            sub_edges = [id_to_edge[eid] for eid in cyc_eids]
+            if not sub_edges: 
+                f.write("0\n")
+                continue
+                
+            local_adj = defaultdict(list)
+            for u, v in sub_edges:
+                local_adj[u].append(v)
+                local_adj[v].append(u)
+            
+            # Walk cycle
+            # Start at a node with degree 2 (should be all)
+            start_node = next(iter(local_adj))
+            path = [start_node]
+            
+            curr = start_node
+            prev = None
+            
+            # We traverse len(sub_edges) times to get full sequence
+            for _ in range(len(sub_edges)):
+                 nbs = local_adj[curr]
+                 # Pick neighbor != prev
+                 next_n = None
+                 for n in nbs:
+                     if n != prev:
+                         next_n = n
+                         break
+                 if next_n is None and nbs: next_n = nbs[0] # Should not happen
+                 
+                 path.append(next_n)
+                 prev = curr
+                 curr = next_n
+                 
+            # Output node sequence (exclude last which duplicates start)
+            out_nodes = path[:-1]
+            out_strs = [str(inv_node_map[n]) for n in out_nodes]
+            f.write(f"{len(out_strs)} {' '.join(out_strs)}\n")
 
-    end_time = time.time()
-    spend_time = end_time - start_time
-    print(f"环数: {cycle_count}，节点数: {node_count}，边数: {edge_cnt}，最小环基数: {beta}，平均环长: {node_count / cycle_count:.2f}")
-    print(f"总用时: {spend_time:.2f} 秒，输出文件: {output_file}")
-
+    print(f"Total Time: {time.time() - t0:.4f}s")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python solution03.py <input_file> <output_file>")
-        sys.exit(1)
-
-    output_dir = "./output"
-    os.makedirs(output_dir, exist_ok=True)
-    main(sys.argv[1], sys.argv[2])
-
-# python solution03.py edge1.txt output_file1.txt
-# python solution03.py edge2.txt output_file2.txt
-# python solution03.py edge3.txt output_file3.txt
-# python solution03.py edge4.txt output_file4.txt
-# python solution03.py edge5.txt output_file5.txt
-# python solution03.py edge6.txt output_file6.txt
-# python solution03.py edge7.txt output_file7.txt
-# python solution03.py edge8.txt output_file8.txt
-# python solution03.py edge9.txt output_file9.txt
-# python solution03.py edge10.txt output_file10.txt
-# python solution03.py edge11.txt output_file11.txt
-# python solution03.py edge12.txt output_file12.txt
-# python solution03.py edge13.txt output_file13.txt
-# python solution03.py edge14.txt output_file14.txt
-# python solution03.py edge15.txt output_file15.txt
-
+    main()
