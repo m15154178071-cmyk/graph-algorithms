@@ -30,10 +30,24 @@
 - 仅依赖 Python 标准库（`collections`, `itertools`, `typing` 等），无需安装额外的第三方包。
 
 #### 运行方式
-通常该脚本通过标准输入或文件读取图数据。具体使用方法取决于您的入口点（例如 `main` 函数的调用方式）。
+通常该脚本通过标准输入或文件读取图数据。
 
+**基础版 (Basic Version)**
+适用于一般规模的图结构分析。
 ```bash
 python solution_basic.py
+```
+
+**增强版 (Enhanced Version)**
+`solution_enhanced.py` 是高级版本，包含以下改进：
+- **引导式搜索 (Guided DFS)**：大大提高了查找长环（C6+）的效率。
+- **诱导环支持**：支持筛选无弦环（Induced Cycles）。
+- **性能优化**：针对中大规模稀疏图进行了深度优化。
+- **NetworkX 对比**：内置了与 NetworkX 库的对比验证（如果安装了 NetworkX）。
+
+```bash
+# 运行增强版算法（如果不修改代码，默认运行内置的 Demo 和验证流程）
+python solution_enhanced.py
 ```
 
 ---
@@ -66,6 +80,20 @@ The project is primarily designed to run as an algorithm script.
 #### Usage
 Typically, the script reads graph data via standard input or files.
 
+**Basic Version**
+Suitable for general graph structure analysis.
 ```bash
 python solution_basic.py
+```
+
+**Enhanced Version**
+`solution_enhanced.py` is the advanced version including:
+- **Guided DFS**: Significantly improves efficiency for finding long cycles (C6+).
+- **Induced Cycle Support**: Supports filtering for chordless cycles.
+- **Performance Optimization**: Deeply optimized for medium-to-large sparse graphs.
+- **NetworkX Verification**: Includes built-in comparison with NetworkX (if installed).
+
+```bash
+# Run the enhanced algorithm (Runs built-in demo and verification by default)
+python solution_enhanced.py
 ```
