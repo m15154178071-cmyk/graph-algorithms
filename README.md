@@ -1,6 +1,6 @@
 # MCB Project (Minimum Cycle Basis and Graph Analysis)
 
-[中文说明](#项目介绍) | [English Description](#english-description)
+[中文说明](#项目介绍) | [English Description](#english-description) | [岗位信息 / Job Positions](JOBS.md)
 
 ---
 
