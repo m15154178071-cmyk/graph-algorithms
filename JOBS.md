@@ -2,6 +2,10 @@
 
 [中文](#中文岗位信息) | [English](#english-job-positions)
 
+> **薪资说明 / Salary Note:** 中文部分薪资为人民币，适用于中国大陆市场；英文部分薪资为美元，适用于国际市场。薪资范围已根据各地区的市场情况和购买力进行本地化调整。
+> 
+> **Salary Note:** Chinese section salaries are in RMB (CNY) for the mainland China market; English section salaries are in USD for international markets. Salary ranges are localized based on regional market conditions and purchasing power parity.
+
 ---
 
 ## <a id="中文岗位信息"></a>中文岗位信息
@@ -34,7 +38,7 @@
 
 **工作年限：** 2-5年
 
-**薪资范围：** 20K-40K/月（根据经验和能力）
+**薪资范围：** 20K-40K/月（人民币，根据经验和能力）
 
 ---
 
@@ -64,7 +68,7 @@
 
 **工作年限：** 1-3年
 
-**薪资范围：** 15K-30K/月
+**薪资范围：** 15K-30K/月（人民币）
 
 ---
 
@@ -94,7 +98,7 @@
 
 **工作年限：** 2-5年
 
-**薪资范围：** 25K-45K/月
+**薪资范围：** 25K-45K/月（人民币）
 
 ---
 
@@ -122,7 +126,7 @@
 
 **工作年限：** 实习
 
-**薪资范围：** 150-300元/天
+**薪资范围：** 150-300元/天（人民币）
 
 ---
 
@@ -151,7 +155,7 @@
 
 **工作年限：** 1-3年
 
-**薪资范围：** 12K-22K/月
+**薪资范围：** 12K-22K/月（人民币）
 
 ---
 
