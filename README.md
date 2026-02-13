@@ -13,7 +13,7 @@
 本项目可以处理以下图分析任务：
 
 #### 1. **最小环基（Minimum Cycle Basis, MCB）计算**
-   - 提取图的最小环基（一组线性无关的环，总长度最小）
+   - 提取图的最小环基（一组线性独立的环，总长度最小）
    - 支持大规模稀疏图的高效计算
    - 可作为 NetworkX 的 `minimum_cycle_basis()` 的高性能替代方案
 
@@ -30,7 +30,7 @@
 
 #### 4. **图的拓扑分析**
    - 计算图的连通分量数量
-   - 计算图的环基维度（beta = |E| - |V| + connected_components）
+   - 计算图的环基维度（beta = |E| - |V| + |C|，其中 |C| 为连通分量数，表示环空间的维度）
    - 构建图的生成树（Spanning Tree）
 
 #### 5. **环的重建与可视化准备**
@@ -49,8 +49,8 @@
     -   支持从输入数据读取边列表，自动处理节点编号并进行格式化（zero-padding）。
     -   构建高效的邻接表和边索引映射。
 2.  **环基提取 (Cycle Basis Extraction)**：
-    -   实现了提取线性无关环的算法。
-    -   支持基于位掩码（Bitmask）的线性无关性检测，确保提取的环构成图的基。
+    -   实现了提取线性独立环的算法。
+    -   支持基于位掩码（Bitmask）的线性独立性检测，确保提取的环构成图的基。
 3.  **短环结构分析**：
     -   专门针对 C3（三角形）和 C4（四边形）等短环结构进行识别和分类。
 4.  **路径与环还原**：
@@ -124,7 +124,7 @@ This project can handle the following graph analysis tasks:
 
 #### 4. **Graph Topology Analysis**
    - Calculate the number of connected components
-   - Calculate the cycle rank (beta = |E| - |V| + connected_components)
+   - Calculate the cycle rank (beta = |E| - |V| + |C|, where |C| is the number of connected components, representing the dimension of the cycle space)
    - Build spanning tree structures
 
 #### 5. **Cycle Reconstruction & Visualization Preparation**
