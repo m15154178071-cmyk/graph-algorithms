@@ -185,7 +185,7 @@ Based on the technical stack and characteristics of this project, here are the r
 
 **Experience:** 2-5 years
 
-**Salary Range:** $30K-60K/year (USD equivalent, varies by location and experience)
+**Salary Range:** $80K-150K/year (USD, varies by location and experience)
 
 ---
 
@@ -215,7 +215,7 @@ Based on the technical stack and characteristics of this project, here are the r
 
 **Experience:** 1-3 years
 
-**Salary Range:** $40K-70K/year
+**Salary Range:** $60K-100K/year
 
 ---
 
@@ -245,7 +245,7 @@ Based on the technical stack and characteristics of this project, here are the r
 
 **Experience:** 2-5 years
 
-**Salary Range:** $50K-80K/year
+**Salary Range:** $90K-160K/year
 
 ---
 
@@ -302,7 +302,7 @@ Based on the technical stack and characteristics of this project, here are the r
 
 **Experience:** 1-3 years
 
-**Salary Range:** $35K-55K/year
+**Salary Range:** $50K-80K/year
 
 ---
 
