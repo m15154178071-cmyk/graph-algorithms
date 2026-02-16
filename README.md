@@ -1,6 +1,18 @@
 # MCB Project (Minimum Cycle Basis and Graph Analysis)
 
-[中文说明](#项目介绍) | [English Description](#english-description)
+[中文说明](#项目介绍) | [English Description](#english-description) | [代码质量评估](#code-quality-assessment)
+
+---
+
+## 📊 代码质量评估 (Code Quality Assessment)
+
+**综合评分: 7.5/10** - 中高级水平 (Intermediate to Advanced)
+
+查看详细评估报告:
+- **[SUMMARY.md](SUMMARY.md)** - 快速总结和行动指南 (Quick summary and action guide)
+- **[CODE_QUALITY_ASSESSMENT.md](CODE_QUALITY_ASSESSMENT.md)** - 详细分析报告 (Detailed analysis)
+- **[IMPROVEMENT_EXAMPLES.md](IMPROVEMENT_EXAMPLES.md)** - 代码改进示例 (Code improvement examples)
+- **[test_linear_basis.py](test_linear_basis.py)** - 单元测试示例 (Unit test examples)
 
 ---
 
