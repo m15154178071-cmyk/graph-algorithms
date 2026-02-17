@@ -7,4 +7,5 @@ output/
 .idea/
 *.txt
 !input*.txt
+!bench_input.txt
 !requirements.txt
