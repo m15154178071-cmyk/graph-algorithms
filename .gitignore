@@ -9,3 +9,8 @@ output/
 !input*.txt
 !bench_input.txt
 !requirements.txt
+
+# Private/Pro edition backups
+*backup.py
+*comprehensive.py
+*pro.py
