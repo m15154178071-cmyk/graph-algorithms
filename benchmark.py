@@ -104,8 +104,7 @@ def main():
     
     scripts = [
         "mcb_cycle_basis_simple.py", 
-        "mcb_cycle_basis_optimized.py", 
-        "mcb_cycle_basis_comprehensive.py"
+        "mcb_cycle_basis_optimized.py"
     ]
     
     input_file = "temp_bench_input.txt"
